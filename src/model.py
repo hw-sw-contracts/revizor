@@ -14,6 +14,8 @@ from config import CONF
 from custom_types import List, Tuple, CTrace
 from helpers import assemble, pretty_bitmap
 
+from dependency_tracking import *
+
 POW32 = pow(2, 32)
 
 
@@ -124,18 +126,24 @@ class L1DTracer(X86UnicornTracer):
 class PCTracer(X86UnicornTracer):
     def observe_instruction(self, address: int, size: int, model):
         self.trace.append(address)
+        if model.dependencyTracker is not None:
+            model.dependencyTracker.observeInstruction("PC")
         super(PCTracer, self).observe_instruction(address, size, model)
 
 
 class MemoryTracer(X86UnicornTracer):
     def observe_mem_access(self, access, address, size, value, model):
         self.trace.append(address)
+        if model.dependencyTracker is not None:
+            model.dependencyTracker.observeInstruction("OPS")
         super(MemoryTracer, self).observe_mem_access(access, address, size, value, model)
 
 
 class CTTracer(MemoryTracer):
     def observe_instruction(self, address: int, size: int, model):
         self.trace.append(address)
+        if model.dependencyTracker is not None:
+            model.dependencyTracker.observeInstruction("PC")
         super(CTTracer, self).observe_instruction(address, size, model)
 
 
@@ -165,6 +173,9 @@ class ArchTracer(CTRTracer):
         if access == UC_MEM_READ:
             val = int.from_bytes(model.emulator.mem_read(address, size), byteorder='little')
             self.trace.append(val)
+            if self.dependencyTracker is not None:
+                self.dependencyTracker.observerMemoryAddress(address,size)
+
         self.trace.append(address)
         super(ArchTracer, self).observe_mem_access(access, address, size, value, model)
 
@@ -183,9 +194,11 @@ class X86UnicornModel(Model):
     previous_store: Tuple[int, int, int, int]
     tracer: X86UnicornTracer
     nesting: int = 0
-    debug: bool = False
+    debug: bool = True
+    dependencyTracker: DependencyTracker
 
     def load_test_case(self, test_case_asm: str) -> None:
+
         # create a binary
         assemble(test_case_asm, 'tmp.o')
 
@@ -240,31 +253,101 @@ class X86UnicornModel(Model):
 
         traces = []
         full_execution_traces = []
+
+        # self.dependencyTracker = None
+        boost = 1
+        if self.dependencyTracker is not None:
+            deltas = []
+
         for i, input_ in enumerate(inputs):
-            try:
-                self.reset_model()
-                self.reset_emulator(input_)
-                self.tracer.reset_trace(self.emulator)
-                self.emulator.emu_start(self.code_base, self.code_base + len(self.code),
-                                        timeout=10000)
-            except UcError as e:
-                if not self.in_speculation:
-                    self.print_state()
-                    print("Model error [trace_test_case]: %s" % e)
-                    raise e
 
-            # if we use one of the SPEC contracts, we might have some residual simulations
-            # that did not reach the spec. window by the end of simulation. Those need
-            # to be rolled back
-            while self.in_speculation:
+            if i < boost or self.dependencyTracker is None:
                 try:
-                    self.rollback()
-                except UcError:
-                    continue
+                    self.reset_model()
+                    self.reset_emulator(input_)
+                    self.tracer.reset_trace(self.emulator)
+                    if self.dependencyTracker is not None:
+                        self.dependencyTracker.reset()
+                    self.emulator.emu_start(self.code_base, self.code_base + len(self.code),
+                                            timeout=10000)
+                except UcError as e:
+                    if not self.in_speculation:
+                        self.print_state()
+                        print("Model error [trace_test_case]: %s" % e)
+                        raise e
 
-            # store the results
-            traces.append(self.tracer.get_trace())
-            full_execution_traces.append(self.tracer.get_full_execution_trace())
+                # if we use one of the SPEC contracts, we might have some residual simulations
+                # that did not reach the spec. window by the end of simulation. Those need
+                # to be rolled back
+                while self.in_speculation:
+                    try:
+                        self.rollback()
+                    except UcError:
+                        continue
+
+                # store the results
+                traces.append(self.tracer.get_trace())
+                full_execution_traces.append(self.tracer.get_full_execution_trace())
+
+
+                if self.dependencyTracker is not None:
+                    dependencies = self.dependencyTracker.get_observed_dependencies()
+                    self.reset_emulator(input_)
+                    delta = self.get_emulator_values(dependencies)
+                    deltas.append((i, delta))
+                    # if self.debug:
+                    #     print(f"DEPENDENCIES: {dependencies}")
+                    #     print(f"DELTA {delta}")
+            else:
+                ## Boost :-) 
+                index = i % boost
+                trace = traces[index] 
+                full_execution_trace = full_execution_traces[index]
+                traces.append(trace)
+                full_execution_traces.append(full_execution_trace)
+                deltas.append((i,{}))
+                
+                # if self.debug:
+                #     delta = deltas[index]
+                #     print(f"Input[{i}] {input_}")
+                #     print(f"Delta[{index}] {delta}")
+                #     try:
+                #         self.reset_model()
+                #         self.reset_emulator(input_)
+                #         self.apply_delta(delta)
+                #         ## Continue as before
+                #         self.tracer.reset_trace(self.emulator)
+                #         if self.dependencyTracker is not None:
+                #             self.dependencyTracker.reset()
+                #         self.emulator.emu_start(self.code_base, self.code_base + len(self.code),
+                #                                 timeout=10000)
+                #     except UcError as e:
+                #         if not self.in_speculation:
+                #             self.print_state()
+                #             print("Model error [trace_test_case]: %s" % e)
+                #             raise e
+
+                #     # if we use one of the SPEC contracts, we might have some residual simulations
+                #     # that did not reach the spec. window by the end of simulation. Those need
+                #     # to be rolled back
+                #     while self.in_speculation:
+                #         try:
+                #             self.rollback()
+                #         except UcError:
+                #             continue
+
+                #     if trace == self.tracer.get_trace():
+                #         print(f">>>>> Same trace: {trace}")
+                #     else:
+                #         print(f">>>>> ORIGINAL TRACE: {trace}")
+                #         print(f">>>>> REPLAYED TRACE: {self.tracer.get_trace()}")
+
+                #     if full_execution_trace == self.tracer.get_full_execution_trace():
+                #         print(f">>>>> Same full trace: {full_execution_trace}")
+                #     else:
+                #         print(f">>>>> ORIGINAL FULL TRACE: {full_execution_trace}")
+                #         print(f">>>>> REPLAYED FULL TRACE: {self.tracer.get_full_execution_trace()}")
+                #         exit(1)
 
         if self.coverage_tracker:
             self.coverage_tracker.model_hook(full_execution_traces)
@@ -310,6 +393,302 @@ class X86UnicornModel(Model):
         self.emulator.reg_write(UC_X86_REG_EFLAGS, (random_value & 2263) | 2)
 
         self.emulator.reg_write(UC_X86_REG_RDI, random_value)
+
+
+    def get_emulator_values(self, identifiers):
+        def getFlag(emulator, flag):
+            flagsDict = {"CF" : 0x0001, "PF": 0x0004, "AF": 0x0010, "ZF": 0x0040, "SF":0x0080, "TF": 0x0100, "IF": 0x0200, "DF": 0x0400, "OF": 0x0800, "AC": 0x00040000}
+            if flag in flagsDict.keys():
+                flags = self.emulator.reg_read(UC_X86_REG_EFLAGS)
+                mask = flagsDict[flag]
+                value = flags & mask
+                return value
+            else:
+                print(f"Unsupported flag {flag}")
+                exit(1)
+
+        def getRegister(emulator, reg):
+            regDict = { 
+                "RAX": UC_X86_REG_RAX,
+                "RBX": UC_X86_REG_RBX,
+                "RCX": UC_X86_REG_RCX,
+                "RDX": UC_X86_REG_RDX,
+                "RDI": UC_X86_REG_RDI,
+                "RSI": UC_X86_REG_RSI,
+                "RSP": UC_X86_REG_RSP,
+                "RBP": UC_X86_REG_RBP,
+                "R8": UC_X86_REG_R8,
+                "R9": UC_X86_REG_R9,
+                "R10": UC_X86_REG_R10,
+                "R11": UC_X86_REG_R11,
+                "R12": UC_X86_REG_R12,
+                "R13": UC_X86_REG_R13,
+                "R14": UC_X86_REG_R14,
+            }
+
+            for i in {"A","B","C","D"}:
+                if reg ==  f"R{i}X":
+                    mask = 0xFFFFFFFFFFFFFFFF
+                    value = self.emulator.reg_read(regDict[f"R{i}X"])
+                    return mask & value 
+                elif reg == f"E{i}X":
+                    mask = 0x00000000FFFFFFFF
+                    value = self.emulator.reg_read(regDict[f"R{i}X"])
+                    return mask & value 
+                elif reg == f"{i}X":
+                    mask = 0x000000000000FFFF
+                    value = self.emulator.reg_read(regDict[f"R{i}X"])
+                    return mask & value 
+                elif reg == f"{i}L":
+                    mask = 0x00000000000000FF
+                    value = self.emulator.reg_read(regDict[f"R{i}X"])
+                    return mask & value 
+                elif reg == f"{i}H":
+                    mask = 0x000000000000FF00
+                    value = self.emulator.reg_read(regDict[f"R{i}X"])
+                    return mask & value 
+
+            
+            for i in {"BP","SI","DI","SP", "IP"}:
+                if reg == f"R{i}":
+                    mask = 0xFFFFFFFFFFFFFFFF
+                    value = self.emulator.reg_read(regDict[f"R{i}"])
+                    return mask & value 
+                elif reg == f"E{i}":
+                    mask = 0x00000000FFFFFFFF
+                    value = self.emulator.reg_read(regDict[f"R{i}"])
+                    return mask & value 
+                elif reg == f"{i}":
+                    mask = 0x000000000000FFFF
+                    value = self.emulator.reg_read(regDict[f"R{i}"])
+                    return mask & value 
+                elif reg == f"{i}L":
+                    mask = 0x00000000000000FF
+                    value = self.emulator.reg_read(regDict[f"R{i}"])
+                    return mask & value 
+
+            for i in range(8,16):
+                if reg == f"R{i}":
+                    mask = 0xFFFFFFFFFFFFFFFF
+                    value = self.emulator.reg_read(regDict[f"R{i}"])
+                    return mask & value 
+                elif reg ==  f"R{i}D":
+                    mask = 0x00000000FFFFFFFF
+                    value = self.emulator.reg_read(regDict[f"R{i}"])
+                    return mask & value 
+                elif reg ==  f"R{i}W":
+                    mask = 0x000000000000FFFF
+                    value = self.emulator.reg_read(regDict[f"R{i}"])
+                    return mask & value 
+                elif reg ==  f"R{i}B":
+                    mask = 0x00000000000000FF
+                    value = self.emulator.reg_read(regDict[f"R{i}"])
+                    return mask & value 
+            
+            print(f"Unsupported identifier {reg}")
+            exit(1)
+
+        values = {}
+        for d in identifiers:
+            if d == "PC":
+                pass
+            # elif d == "RAX":
+            #     values[d] = self.emulator.reg_read(UC_X86_REG_RAX)
+            # elif d == "RBX":
+            #     values[d] = self.emulator.reg_read(UC_X86_REG_RBX)
+            # elif d == "RCX":
+            #     values[d] = self.emulator.reg_read(UC_X86_REG_RCX)
+            # elif d == "RDX":
+            #     values[d] = self.emulator.reg_read(UC_X86_REG_RDX)
+            # elif d == "RDI":
+            #     values[d] = self.emulator.reg_read(UC_X86_REG_RDI)
+            # elif d == "RSI":
+            #     values[d] = self.emulator.reg_read(UC_X86_REG_RSI)
+            # elif d == "RSP":
+            #     values[d] = self.emulator.reg_read(UC_X86_REG_RSP)
+            # elif d == "RBP":
+            #     values[d] = self.emulator.reg_read(UC_X86_REG_RBP)
+            # elif d == "R8":
+            #     values[d] = self.emulator.reg_read(UC_X86_REG_R8)
+            # elif d == "R9":
+            #     values[d] = self.emulator.reg_read(UC_X86_REG_R9)
+            # elif d == "R10":
+            #     values[d] = self.emulator.reg_read(UC_X86_REG_R10)
+            # elif d == "R11":
+            #     values[d] = self.emulator.reg_read(UC_X86_REG_R11)
+            # elif d == "R12":
+            #     values[d] = self.emulator.reg_read(UC_X86_REG_R12)
+            # elif d == "R13":
+            #     values[d] = self.emulator.reg_read(UC_X86_REG_R13)
+            # elif d == "R14":
+            #     values[d] = self.emulator.reg_read(UC_X86_REG_R14)
+            elif type(d) is int:
+                values[d] = self.emulator.mem_read(d, 1)
+            elif d in {"CF", "PF", "AF", "ZF", "SF", "TF", "IF", "DF", "OF", "AC"}:
+                values[d] = getFlag(self.emulator, d)
+            else: 
+                values[d] = getRegister(self.emulator, d)
+
+        return values
+        
+    def apply_delta(self, values):
+        def setFlag(emulator, flag, value):
+            flagsDict = {"CF" : 0x0001, "PF": 0x0004, "AF": 0x0010, "ZF": 0x0040, "SF":0x0080, "TF": 0x0100, "IF": 0x0200, "DF": 0x0400, "OF": 0x0800, "AC": 0x00040000}
+            if flag in flagsDict.keys():
+                flags = self.emulator.reg_read(UC_X86_REG_EFLAGS)
+                mask = flagsDict[flag]
+                value = flags & mask
+                if value != values[d]:
+                    if values[d] == 0:
+                        # Clearing bit
+                        flags |= 1 << mask
+                    else:
+                        # Setting bit
+                        flags &= ~(1 << mask)
+                else:
+                    # no need to change stuff 
+                    pass
+                # Write back the updated flags
+                self.emulator.reg_write(UC_X86_REG_EFLAGS, flags)
+            else:
+                print(f"Unsupported flag {flag}")
+                exit(1)
+
+        def setRegister(emulator, reg, value):
+            regDict = { "RAX": UC_X86_REG_RAX,"RBX": UC_X86_REG_RBX,"RCX": UC_X86_REG_RCX,"RDX": UC_X86_REG_RDX,"RDI": UC_X86_REG_RDI,"RSI": UC_X86_REG_RSI,"RSP": UC_X86_REG_RSP,"RBP": UC_X86_REG_RBP,"R8": UC_X86_REG_R8,"R9": UC_X86_REG_R9,"R10": UC_X86_REG_R10,"R11": UC_X86_REG_R11,"R12": UC_X86_REG_R12,"R13": UC_X86_REG_R13,"R14": UC_X86_REG_R14 }
+            
+            for i in {"A","B","C","D"}:
+                if reg ==  f"R{i}X":
+                    self.emulator.reg_write(regDict[f"R{i}X"], values[d])
+                    return
+                elif reg == f"E{i}X":
+                    init = bytearray(self.emulator.reg_read(regDict[f"R{i}X"]).to_bytes(8, 'little'))
+                    toSet = bytearray(value.to_bytes(8, 'little'))
+                    init[0] = toSet[0]
+                    init[1] = toSet[1]
+                    init[2] = toSet[2]
+                    init[3] = toSet[3]
+                    self.emulator.reg_write(regDict[f"R{i}X"], int.from_bytes(bytes(init), byteorder='little'))
+                    return
+                elif reg == f"{i}X":
+                    init = bytearray(self.emulator.reg_read(regDict[f"R{i}X"]).to_bytes(8, 'little'))
+                    toSet = bytearray(value.to_bytes(8, 'little'))
+                    init[0] = toSet[0]
+                    init[1] = toSet[1]
+                    self.emulator.reg_write(regDict[f"R{i}X"], int.from_bytes(bytes(init), byteorder='little'))
+                    return
+                elif reg == f"{i}L":
+                    init = bytearray(self.emulator.reg_read(regDict[f"R{i}X"]).to_bytes(8, 'little'))
+                    toSet = bytearray(value.to_bytes(8, 'little'))
+                    init[0] = toSet[0]
+                    self.emulator.reg_write(regDict[f"R{i}X"], int.from_bytes(bytes(init), byteorder='little'))
+                    return
+                elif reg == f"{i}H":
+                    init = bytearray(self.emulator.reg_read(regDict[f"R{i}X"]).to_bytes(8, 'little'))
+                    toSet = bytearray(value.to_bytes(8, 'little'))
+                    init[1] = toSet[1]
+                    self.emulator.reg_write(regDict[f"R{i}X"], int.from_bytes(bytes(init), byteorder='little'))
+                    return
+
+            for i in {"BP","SI","DI","SP", "IP"}:
+                if reg == f"R{i}":
+                    self.emulator.reg_write(regDict[f"R{i}"], values[d])
+                    return
+                elif reg == f"E{i}":
+                    init = bytearray(self.emulator.reg_read(regDict[f"R{i}"]).to_bytes(8, 'little'))
+                    toSet = bytearray(value.to_bytes(8, 'little'))
+                    init[0] = toSet[0]
+                    init[1] = toSet[1]
+                    init[2] = toSet[2]
+                    init[3] = toSet[3]
+                    self.emulator.reg_write(regDict[f"R{i}"], int.from_bytes(bytes(init), byteorder='little'))
+                    return
+                elif reg == f"{i}":
+                    init = bytearray(self.emulator.reg_read(regDict[f"R{i}"]).to_bytes(8, 'little'))
+                    toSet = bytearray(value.to_bytes(8, 'little'))
+                    init[0] = toSet[0]
+                    init[1] = toSet[1]
+                    self.emulator.reg_write(regDict[f"R{i}"], int.from_bytes(bytes(init), byteorder='little'))
+                    return
+                elif reg == f"{i}L":
+                    init = bytearray(self.emulator.reg_read(regDict[f"R{i}"]).to_bytes(8, 'little'))
+                    toSet = bytearray(value.to_bytes(8, 'little'))
+                    init[0] = toSet[0]
+                    self.emulator.reg_write(regDict[f"R{i}"], int.from_bytes(bytes(init), byteorder='little'))
+                    return
+
+            for i in range(8,16):
+                if reg == f"R{i}":
+                    self.emulator.reg_write(regDict[f"R{i}"], values[d])
+                    return
+                elif reg ==  f"R{i}D":
+                    init = bytearray(self.emulator.reg_read(regDict[f"R{i}"]).to_bytes(8, 'little'))
+                    toSet = bytearray(value.to_bytes(8, 'little'))
+                    init[0] = toSet[0]
+                    init[1] = toSet[1]
+                    init[2] = toSet[2]
+                    init[3] = toSet[3]
+                    self.emulator.reg_write(regDict[f"R{i}"], int.from_bytes(bytes(init), byteorder='little'))
+                    return
+                elif reg ==  f"R{i}W":
+                    init = bytearray(self.emulator.reg_read(regDict[f"R{i}"]).to_bytes(8, 'little'))
+                    toSet = bytearray(value.to_bytes(8, 'little'))
+                    init[0] = toSet[0]
+                    init[1] = toSet[1]
+                    self.emulator.reg_write(regDict[f"R{i}"], int.from_bytes(bytes(init), byteorder='little'))
+                    return
+                elif reg ==  f"R{i}B":
+                    init = bytearray(self.emulator.reg_read(regDict[f"R{i}"]).to_bytes(8, 'little'))
+                    toSet = bytearray(value.to_bytes(8, 'little'))
+                    init[0] = toSet[0]
+                    self.emulator.reg_write(regDict[f"R{i}"], int.from_bytes(bytes(init), byteorder='little'))
+                    return
+
+            print(f"Unsupported identifier {reg}")
+            exit(1)
+
+        for d in values.keys():
+            if d == "PC":
+                pass
+            # elif d == "RAX":
+            #     self.emulator.reg_write(UC_X86_REG_RAX, values[d])
+            # elif d == "RBX":
+            #     self.emulator.reg_write(UC_X86_REG_RBX, values[d])
+            # elif d == "RCX":
+            #     self.emulator.reg_write(UC_X86_REG_RCX, values[d])
+            # elif d == "RDX":
+            #     self.emulator.reg_write(UC_X86_REG_RDX, values[d])
+            # elif d == "RDI":
+            #     self.emulator.reg_write(UC_X86_REG_RDI, values[d])
+            # elif d == "RSI":
+            #     self.emulator.reg_write(UC_X86_REG_RSI, values[d])
+            # elif d == "RSP":
+            #     self.emulator.reg_write(UC_X86_REG_RSP, values[d])
+            # elif d == "RBP":
+            #     self.emulator.reg_write(UC_X86_REG_RBP, values[d])
+            # elif d == "R8":
+            #     self.emulator.reg_write(UC_X86_REG_R8, values[d])
+            # elif d == "R9":
+            #     self.emulator.reg_write(UC_X86_REG_R9, values[d])
+            # elif d == "R10":
+            #     self.emulator.reg_write(UC_X86_REG_R10, values[d])
+            # elif d == "R11":
+            #     self.emulator.reg_write(UC_X86_REG_R11, values[d])
+            # elif d == "R12":
+            #     self.emulator.reg_write(UC_X86_REG_R12, values[d])
+            # elif d == "R13":
+            #     self.emulator.reg_write(UC_X86_REG_R13, values[d])
+            # elif d == "R14":
+            #     self.emulator.reg_write(UC_X86_REG_R14, values[d])
+            elif type(d) is int:
+                self.emulator.mem_write(d, bytes(values[d]))
+            elif d in {"CF", "PF", "AF", "ZF", "SF", "TF", "IF", "DF", "OF", "AC"}:
+                setFlag(self.emulator, d, values[d])
+            else:
+                setRegister(self.emulator, d, values[d])
+
+
+
 
     def print_state(self, oneline: bool = False):
         def compressed(val: str):
@@ -366,11 +745,20 @@ class X86UnicornSeq(X86UnicornModel):
 
     @staticmethod
     def trace_mem_access(emulator, access, address: int, size, value, model):
+        if model.dependencyTracker is not None:
+            mode = "WRITE" if access == UC_MEM_WRITE else "READ"
+            model.dependencyTracker.trackMemoryAccess(address,size,mode)
         model.tracer.observe_mem_access(access, address, size, value, model)
 
     @staticmethod
     def trace_code(emulator: Uc, address, size, model) -> None:
+        if model.dependencyTracker is not None:
+            model.dependencyTracker.finalizeTracking()
+            code = bytes(emulator.mem_read(address, size))
+            model.dependencyTracker.initialize(code)
         model.tracer.observe_instruction(address, size, model)
+
+
 
 
 class X86UnicornSpec(X86UnicornModel):
@@ -672,6 +1060,8 @@ def get_model(bases) -> Model:
         else:
             print("Error: unknown value of `contract_observation_mode` configuration option")
             exit(1)
+
+        model.dependencyTracker = DependencyTracker(64)
 
         return model
     else:

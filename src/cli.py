@@ -133,7 +133,7 @@ def main():
     # Fuzzing
     if args.subparser_name == 'fuzz':
         # Make sure we're ready for fuzzing
-        ensure_reliable_environment()
+        # ensure_reliable_environment() ## MG: clean this up
         if args.working_directory and not os.path.isdir(args.working_directory):
             print("The working directory does not exist")
             exit(1)
