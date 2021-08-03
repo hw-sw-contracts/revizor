@@ -99,6 +99,8 @@ class Fuzzer:
         generator.set_coverage(coverage)
 
         # preserve the original ratio of inputs to the test case size
+        if CONF.equivalence_class_boost:
+            num_inputs = num_inputs * CONF.equivalence_class_boost_nr 
         input_ratio = num_inputs / CONF.test_case_size
         STAT.num_inputs = num_inputs
 
@@ -164,13 +166,13 @@ class Fuzzer:
         model.load_test_case(self.test_case)
         executor.load_test_case(self.test_case)
 
-        # Initial measurement
-        htraces: List[HTrace] = executor.trace_test_case(inputs)
-
         # by default, we test without nested misprediction,
         # but retry with nesting upon a violation
         for nesting in [1, CONF.max_nesting]:
-            ctraces: List[CTrace] = model.trace_test_case(inputs, nesting)
+            ctraces, deltas = model.trace_test_case(inputs, nesting)
+
+            # Initial measurement
+            htraces: List[HTrace] = executor.trace_test_case(inputs, deltas=deltas)
 
             # for debugging
             if CONF.verbose == 999:

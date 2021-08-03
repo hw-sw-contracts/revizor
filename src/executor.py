@@ -23,7 +23,7 @@ class Executor(ABC):
         pass
 
     @abstractmethod
-    def trace_test_case(self, inputs: List[int], num_measurements: int = 0) \
+    def trace_test_case(self, inputs: List[int], deltas:List, num_measurements: int = 0) \
             -> List[CombinedHTrace]:
         pass
 
@@ -53,7 +53,7 @@ class X86Intel(Executor):
         assemble(test_case_asm, 'generated.o')
         write_to_pseudo_file("generated.o", "/sys/x86-executor/code")
 
-    def trace_test_case(self, inputs: List[int], num_measurements: int = 0) \
+    def trace_test_case(self, inputs: List[int], deltas:List = [], num_measurements: int = 0) \
             -> List[CombinedHTrace]:
         # make sure it's not a dummy call
         if not inputs:
@@ -162,7 +162,7 @@ class Dummy(Executor):
     def load_test_case(self, test_case_asm: str):
         pass
 
-    def trace_test_case(self, inputs: List[int], num_measurements: int = 0) \
+    def trace_test_case(self, inputs: List[int], deltas:List = [], num_measurements: int = 0) \
             -> List[CombinedHTrace]:
         return [0 for i in range (0, len(inputs))]
 

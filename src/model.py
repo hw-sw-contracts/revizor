@@ -41,7 +41,7 @@ class Model(ABC):
         pass
 
     @abstractmethod
-    def trace_test_case(self, inputs: List[int], nesting: int, debug: bool = False) -> List[CTrace]:
+    def trace_test_case(self, inputs: List[int], nesting: int, debug: bool = False):
         pass
 
     def set_coverage(self, coverage_tracker):
@@ -253,15 +253,11 @@ class X86UnicornModel(Model):
 
         traces = []
         full_execution_traces = []
-
-        # self.dependencyTracker = None
-        boost = 1
-        if self.dependencyTracker is not None:
-            deltas = []
+        deltas = []
 
         for i, input_ in enumerate(inputs):
 
-            if i < boost or self.dependencyTracker is None:
+            if i < CONF.equivalence_class_boost_nr or not(CONF.equivalence_class_boost):
                 try:
                     self.reset_model()
                     self.reset_emulator(input_)
@@ -294,18 +290,17 @@ class X86UnicornModel(Model):
                     dependencies = self.dependencyTracker.get_observed_dependencies()
                     self.reset_emulator(input_)
                     delta = self.get_emulator_values(dependencies)
-                    deltas.append((i, delta))
+                    deltas.append(delta)
                     # if self.debug:
                     #     print(f"DEPENDENCIES: {dependencies}")
                     #     print(f"DELTA {delta}")
             else:
-                ## Boost :-) 
-                index = i % boost
+                index = i % CONF.equivalence_class_boost_nr
                 trace = traces[index] 
                 full_execution_trace = full_execution_traces[index]
                 traces.append(trace)
                 full_execution_traces.append(full_execution_trace)
-                deltas.append((i,{}))
+                deltas.append(index)
                 
                 # if self.debug:
                 #     delta = deltas[index]
@@ -352,7 +347,7 @@ class X86UnicornModel(Model):
         if self.coverage_tracker:
             self.coverage_tracker.model_hook(full_execution_traces)
 
-        return traces
+        return (traces, deltas)
 
     def reset_emulator(self, seed):
         self.checkpoints = []
@@ -1061,7 +1056,8 @@ def get_model(bases) -> Model:
             print("Error: unknown value of `contract_observation_mode` configuration option")
             exit(1)
 
-        model.dependencyTracker = DependencyTracker(64)
+        if CONF.equivalence_class_boost:
+            model.dependencyTracker = DependencyTracker(64)
 
         return model
     else:

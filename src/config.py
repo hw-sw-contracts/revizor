@@ -109,6 +109,8 @@ class ConfCls:
     prng_seed: int = 10  # zero is a reserved value, do not use it
     prng_entropy_bits: int = 3
     randomized_mem_alignment: bool = True
+    equivalence_class_boost : bool = True
+    equivalence_class_boost_nr : int = 50
     # ==============================================================================================
     # Model
     model: str = 'x86-unicorn'
