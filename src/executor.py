@@ -124,7 +124,7 @@ class X86Intel(Executor):
                     delta_bytes = delta_bytes + mem_bytes
 
             write_to_pseudo_file(str(len(delta_bytes)), "/sys/x86-executor/deltas_size")
-            write_to_pseudo_file_bytes(delta_bytes, "/sys/x86-executor/deltas")
+            write_to_pseudo_file_bytes(bytes().join(delta_bytes), "/sys/x86-executor/deltas")
             with open('/sys/x86-executor/deltas', 'r') as f:
                 if f.readline() == '0\n':
                     print("Failure loading deltas!")
