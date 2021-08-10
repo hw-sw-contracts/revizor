@@ -48,6 +48,8 @@ class X86Intel(Executor):
         write_to_pseudo_file("1" if CONF.enable_mds else "0",
                              "/sys/x86-executor/enable_mds")
         write_to_pseudo_file(CONF.attack_variant, "/sys/x86-executor/measurement_mode")
+        write_to_pseudo_file("1" if CONF.equivalence_class_boost else "0",
+                             "/sys/x86-executor/enable_deltas")
 
     def load_test_case(self, test_case_asm: str):
         assemble(test_case_asm, 'generated.o')
@@ -62,6 +64,24 @@ class X86Intel(Executor):
         # is kernel module ready?
         if not os.path.isfile("/proc/x86-executor"):
             print("Error: x86 Intel Executor: kernel module not loaded")
+
+        # change inputs if there are delta snapshots
+        old_inputs = inputs
+        if deltas != []:
+            if len(inputs) != len(deltas):
+                print("Lenght of inputs and deltas is different!")
+                exit(1)
+
+            if not(CONF.equivalence_class_boost):
+                print("Deltas are unsupported")
+                exit(1)
+            dependencies = []
+            for i in range(len(inputs)):
+                if i < CONF.equivalence_class_boost_nr:
+                    dependencies.append(deltas[i])
+                else:
+                    # i >= CONF.equivalence_class_boost_nr: replace input
+                    inputs[i] = old_inputs[deltas[i]]
 
         if num_measurements == 0:
             num_measurements = CONF.num_measurements
@@ -84,6 +104,31 @@ class X86Intel(Executor):
             if f.readline() == '0\n':
                 print("Failure loading inputs!")
                 raise Exception()
+
+        # 4) Write the delta information
+        if deltas != []:
+            # for each delta entry we write nr. bytes + newInput + loc1 + ... + locN 
+            delta_bytes = []
+            for i in range(len(inputs)):
+                if i < CONF.equivalence_class_boost_nr:
+                    delta_bytes.append(int(0).to_bytes(8, byteorder='little'))
+                else:
+                    input_bytes = old_inputs[i].to_bytes(8,  byteorder='little')
+                    mem_deps = [ i for i in dependencies[deltas[i]].keys() if isinstance(i, int)]
+                    mem_bytes = [ i.to_bytes(8, byteorder='little') for i in mem_deps]
+                    # append lenght of delta block
+                    delta_bytes.append( int(1+len(mem_bytes)).to_bytes(8, byteorder='little')  )
+                    # append input value
+                    delta_bytes.append(input_bytes)
+                    # append all memory dependencies
+                    delta_bytes = delta_bytes + mem_bytes
+
+            write_to_pseudo_file(str(len(delta_bytes)), "/sys/x86-executor/deltas_size")
+            write_to_pseudo_file_bytes(delta_bytes, "/sys/x86-executor/deltas")
+            with open('/sys/x86-executor/deltas', 'r') as f:
+                if f.readline() == '0\n':
+                    print("Failure loading deltas!")
+                    raise Exception()
 
         traces = [[] for _ in inputs]
         pfc_readings = [[[], [], []] for _ in inputs]

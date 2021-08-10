@@ -58,7 +58,6 @@ def write_to_pseudo_file_bytes(value: bytes, path: str) -> None:
     with open(path, "wb") as f:
         f.write(value)
 
-
 MASK_64BIT = pow(2, 64)
 POW2_64 = pow(2, 64)
 TWOS_COMPLEMENT_MASK_64 = pow(2, 64) - 1
