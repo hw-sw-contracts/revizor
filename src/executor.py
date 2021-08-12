@@ -68,6 +68,7 @@ class X86Intel(Executor):
         # change inputs if there are delta snapshots
         old_inputs = inputs
         if deltas != []:
+
             if len(inputs) != len(deltas):
                 print("Lenght of inputs and deltas is different!")
                 exit(1)
@@ -107,27 +108,44 @@ class X86Intel(Executor):
 
         # 4) Write the delta information
         if deltas != []:
-            # for each delta entry we write nr. bytes + newInput + loc1 + ... + locN 
-            delta_bytes = []
-            for i in range(len(inputs)):
-                if i < CONF.equivalence_class_boost_nr:
-                    delta_bytes.append(int(0).to_bytes(8, byteorder='little'))
-                else:
-                    input_bytes = old_inputs[i].to_bytes(8,  byteorder='little')
-                    mem_deps = [ i for i in dependencies[deltas[i]].keys() if isinstance(i, int)]
-                    mem_bytes = [ i.to_bytes(8, byteorder='little') for i in mem_deps]
-                    # append lenght of delta block
-                    delta_bytes.append( int(1+len(mem_bytes)).to_bytes(8, byteorder='little')  )
-                    # append input value
-                    delta_bytes.append(input_bytes)
-                    # append all memory dependencies
-                    delta_bytes = delta_bytes + mem_bytes
-
-            write_to_pseudo_file(str(len(delta_bytes)), "/sys/x86-executor/deltas_size")
-            write_to_pseudo_file_bytes(bytes().join(delta_bytes), "/sys/x86-executor/deltas")
-            with open('/sys/x86-executor/deltas', 'r') as f:
+            # 1. prepare dependencies 
+            deps_size = 0
+            deps_bytes = []
+            for d in dependencies:
+                sandbox_base, stack_base, code_base = self.read_base_addresses()
+                # collect memory dependencies relative to sandbox base
+                mem_deps = [ (i - sandbox_base) for i in d.keys() if isinstance(i, int)] 
+                if len(mem_deps) > 255:
+                    print("We only support at most 255 dependencies!")
+                    exit(1)
+                ## Each dependency is encoded with at most 3 bytes
+                mem_bytes = [ i.to_bytes(3, byteorder='little') for i in mem_deps]
+                len_byte = len(mem_deps).to_bytes(1, byteorder='little')
+                deps_bytes += [len_byte]
+                deps_bytes += mem_bytes
+                deps_size += 1 + 3 * len(mem_deps)
+            
+            # 2. write dependencies 
+            write_to_pseudo_file(str(deps_size), "/sys/x86-executor/deps_size")
+            write_to_pseudo_file_bytes(bytes().join(deps_bytes), "/sys/x86-executor/deps")
+            with open('/sys/x86-executor/deps', 'r') as f:
                 if f.readline() == '0\n':
-                    print("Failure loading deltas!")
+                    print("Failure loading dependencies!")
+                    raise Exception()
+            
+            # 3. write delta_threshold
+            write_to_pseudo_file(str(CONF.equivalence_class_boost_nr), "/sys/x86-executor/deltas_threshold")
+
+            # 4. prepare delta_inputs
+            delta_inputs = [old_inputs[i].to_bytes(8, byteorder='little') for i in range(CONF.equivalence_class_boost_nr, len(inputs))]
+            delta_inputs_bytes = bytes().join(delta_inputs)
+
+            # 5. write delta_inputs
+            write_to_pseudo_file(str(len(delta_inputs)), "/sys/x86-executor/delta_inputs_size")
+            write_to_pseudo_file_bytes(delta_inputs_bytes, "/sys/x86-executor/delta_inputs")
+            with open('/sys/x86-executor/delta_inputs', 'r') as f:
+                if f.readline() == '0\n':
+                    print("Failure loading delta inputs!")
                     raise Exception()
 
         traces = [[] for _ in inputs]

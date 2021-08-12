@@ -615,36 +615,6 @@ class X86UnicornModel(Model):
         for d in values.keys():
             if d == "PC":
                 pass
-            # elif d == "RAX":
-            #     self.emulator.reg_write(UC_X86_REG_RAX, values[d])
-            # elif d == "RBX":
-            #     self.emulator.reg_write(UC_X86_REG_RBX, values[d])
-            # elif d == "RCX":
-            #     self.emulator.reg_write(UC_X86_REG_RCX, values[d])
-            # elif d == "RDX":
-            #     self.emulator.reg_write(UC_X86_REG_RDX, values[d])
-            # elif d == "RDI":
-            #     self.emulator.reg_write(UC_X86_REG_RDI, values[d])
-            # elif d == "RSI":
-            #     self.emulator.reg_write(UC_X86_REG_RSI, values[d])
-            # elif d == "RSP":
-            #     self.emulator.reg_write(UC_X86_REG_RSP, values[d])
-            # elif d == "RBP":
-            #     self.emulator.reg_write(UC_X86_REG_RBP, values[d])
-            # elif d == "R8":
-            #     self.emulator.reg_write(UC_X86_REG_R8, values[d])
-            # elif d == "R9":
-            #     self.emulator.reg_write(UC_X86_REG_R9, values[d])
-            # elif d == "R10":
-            #     self.emulator.reg_write(UC_X86_REG_R10, values[d])
-            # elif d == "R11":
-            #     self.emulator.reg_write(UC_X86_REG_R11, values[d])
-            # elif d == "R12":
-            #     self.emulator.reg_write(UC_X86_REG_R12, values[d])
-            # elif d == "R13":
-            #     self.emulator.reg_write(UC_X86_REG_R13, values[d])
-            # elif d == "R14":
-            #     self.emulator.reg_write(UC_X86_REG_R14, values[d])
             elif type(d) is int:
                 self.emulator.mem_write(d, bytes(values[d]))
             elif d in {"CF", "PF", "AF", "ZF", "SF", "TF", "IF", "DF", "OF", "AC"}:
