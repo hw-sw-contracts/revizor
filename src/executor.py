@@ -114,16 +114,16 @@ class X86Intel(Executor):
             for d in dependencies:
                 sandbox_base, stack_base, code_base = self.read_base_addresses()
                 # collect memory dependencies relative to sandbox base
-                mem_deps = [ (i - sandbox_base) for i in d.keys() if isinstance(i, int)] 
+                mem_deps = [ (i - sandbox_base) for i in d.keys() if isinstance(i, int)].sort() 
                 if len(mem_deps) > 255:
                     print("We only support at most 255 dependencies!")
                     exit(1)
-                ## Each dependency is encoded with at most 3 bytes
-                mem_bytes = [ i.to_bytes(3, byteorder='little') for i in mem_deps]
+                ## Each dependency is encoded with at most 4 bytes
+                mem_bytes = [ i.to_bytes(4, byteorder='little') for i in mem_deps]
                 len_byte = len(mem_deps).to_bytes(1, byteorder='little')
                 deps_bytes += [len_byte]
                 deps_bytes += mem_bytes
-                deps_size += 1 + 3 * len(mem_deps)
+                deps_size += 1 + 4 * len(mem_deps)
             
             # 2. write dependencies 
             write_to_pseudo_file(str(deps_size), "/sys/x86-executor/deps_size")
