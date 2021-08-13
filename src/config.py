@@ -79,27 +79,27 @@ class ConfCls:
         "CMPSB", "CMPSD", "CMPSW",
         "MOVSB", "MOVSD", "MOVSW",
 
+        # "REPE LODSB", "REPE LODSD", "REPE LODSW",
+        # "REPE SCASB", "REPE SCASD", "REPE SCASW",
+        # "REPE STOSB", "REPE STOSD", "REPE STOSW",
         "REPE CMPSB", "REPE CMPSD", "REPE CMPSW",
-        "REPE LODSB", "REPE LODSD", "REPE LODSW",
         "REPE MOVSB", "REPE MOVSD", "REPE MOVSW",
-        "REPE SCASB", "REPE SCASD", "REPE SCASW",
-        "REPE STOSB", "REPE STOSD", "REPE STOSW",
 
+        # "REPNE LODSB", "REPNE LODSD", "REPNE LODSW",
+        # "REPNE SCASB", "REPNE SCASD", "REPNE SCASW",
+        # "REPNE STOSB", "REPNE STOSD", "REPNE STOSW"
         "REPNE CMPSB", "REPNE CMPSD", "REPNE CMPSW",
-        "REPNE LODSB", "REPNE LODSD", "REPNE LODSW",
         "REPNE MOVSB", "REPNE MOVSD", "REPNE MOVSW",
-        "REPNE SCASB", "REPNE SCASD", "REPNE SCASW",
-        "REPNE STOSB", "REPNE STOSD", "REPNE STOSW"
     ]
     # x86 executor internally uses R15, R14, RSP, RBP and, thus, they are excluded
     # segment registers are also excluded as we don't support their handling so far
     # same for CR* and DR*
     gpr_blocklist = [
-        # free - rax, rbx, rcx, rdx
-        'R8', 'R9', 'R10', 'R11', 'R12', 'R13', 'R14', 'R15', 'RSP', 'RBP', 'RDI', 'RSI',
-        'R8D', 'R9D', 'R10D', 'R11D', 'R12D', 'R13D', 'R14D', 'R15D', 'ESP', 'EBP', 'EDI', 'ESI',
-        'R8W', 'R9W', 'R10W', 'R11W', 'R12W', 'R13W', 'R14W', 'R15W', 'SP', 'BP', 'DI', 'SI',
-        'R8B', 'R9B', 'R10B', 'R11B', 'R12B', 'R13B', 'R14B', 'R15B', 'SPL', 'BPL', 'DIL', 'SIL',
+        # free - rax, rbx, rcx, rdx, rdi, rsi
+        'R8', 'R9', 'R10', 'R11', 'R12', 'R13', 'R14', 'R15', 'RSP', 'RBP',
+        'R8D', 'R9D', 'R10D', 'R11D', 'R12D', 'R13D', 'R14D', 'R15D', 'ESP', 'EBP',
+        'R8W', 'R9W', 'R10W', 'R11W', 'R12W', 'R13W', 'R14W', 'R15W', 'SP', 'BP',
+        'R8B', 'R9B', 'R10B', 'R11B', 'R12B', 'R13B', 'R14B', 'R15B', 'SPL', 'BPL',
         'ES', 'CS', 'SS', 'DS', 'FS', 'GS',
         'CR0', 'CR2', 'CR3', 'CR4', 'CR8',
         'DR0', 'DR1', 'DR2', 'DR3', 'DR4', 'DR5', 'DR6', 'DR7'
