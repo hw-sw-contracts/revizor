@@ -114,7 +114,8 @@ class X86Intel(Executor):
             for d in dependencies:
                 sandbox_base, stack_base, code_base = self.read_base_addresses()
                 # collect memory dependencies relative to sandbox base
-                mem_deps = [ (i - sandbox_base) for i in d.keys() if isinstance(i, int)].sort() 
+                mem_deps = [ (i - sandbox_base) for i in d.keys() if isinstance(i, int)]
+                mem_deps.sort()
                 if len(mem_deps) > 255:
                     print("We only support at most 255 dependencies!")
                     exit(1)
