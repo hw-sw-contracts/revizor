@@ -254,9 +254,8 @@ class X86UnicornModel(Model):
         traces = []
         full_execution_traces = []
         deltas = []
-
         for i, input_ in enumerate(inputs):
-            if i < CONF.equivalence_class_boost_nr or not(CONF.equivalence_class_boost):
+            if not(CONF.equivalence_class_boost) or i < CONF.boost_threshold:
                 try:
                     self.reset_model()
                     self.reset_emulator(input_)
@@ -294,7 +293,7 @@ class X86UnicornModel(Model):
                     #     print(f"DEPENDENCIES: {dependencies}")
                     #     print(f"DELTA {delta}")
             else:
-                index = i % CONF.equivalence_class_boost_nr
+                index = i % CONF.boost_threshold
                 trace = traces[index] 
                 full_execution_trace = full_execution_traces[index]
                 traces.append(trace)

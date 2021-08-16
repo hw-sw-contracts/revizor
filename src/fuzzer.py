@@ -100,7 +100,8 @@ class Fuzzer:
 
         # preserve the original ratio of inputs to the test case size
         if CONF.equivalence_class_boost:
-            num_inputs = num_inputs * CONF.equivalence_class_boost_nr 
+            CONF.boost_threshold = num_inputs
+            num_inputs = num_inputs * CONF.equivalence_class_boost_nr
         input_ratio = num_inputs / CONF.test_case_size
         STAT.num_inputs = num_inputs
 
