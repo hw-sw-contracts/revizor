@@ -57,6 +57,7 @@ class X86Intel(Executor):
 
     def trace_test_case(self, inputs: List[int], deltas:List = [], num_measurements: int = 0) \
             -> List[CombinedHTrace]:
+
         # make sure it's not a dummy call
         if not inputs:
             return []
@@ -66,7 +67,7 @@ class X86Intel(Executor):
             print("Error: x86 Intel Executor: kernel module not loaded")
 
         # change inputs if there are delta snapshots
-        old_inputs = inputs
+        old_inputs = inputs.copy()
         if deltas != []:
 
             if len(inputs) != len(deltas):
@@ -78,10 +79,10 @@ class X86Intel(Executor):
                 exit(1)
             dependencies = []
             for i in range(len(inputs)):
-                if i < CONF.equivalence_class_boost_nr:
+                if i < CONF.boost_threshold:
                     dependencies.append(deltas[i])
                 else:
-                    # i >= CONF.equivalence_class_boost_nr: replace input
+                    # i >= CONF.boost_threshold: replace input
                     inputs[i] = old_inputs[deltas[i]]
 
         if num_measurements == 0:
@@ -114,17 +115,18 @@ class X86Intel(Executor):
             for d in dependencies:
                 sandbox_base, stack_base, code_base = self.read_base_addresses()
                 # collect memory dependencies relative to sandbox base
-                mem_deps = [ (i - sandbox_base) for i in d.keys() if isinstance(i, int)]
+                # mem_deps = [ (i - sandbox_base) for i in d.keys() if isinstance(i, int)]
+                mem_deps = [ i for i in d.keys() if isinstance(i, int)]
                 mem_deps.sort()
                 if len(mem_deps) > 255:
                     print("We only support at most 255 dependencies!")
                     exit(1)
                 ## Each dependency is encoded with at most 4 bytes
-                mem_bytes = [ i.to_bytes(4, byteorder='little') for i in mem_deps]
+                mem_bytes = [ i.to_bytes(8, byteorder='little') for i in mem_deps]
                 len_byte = len(mem_deps).to_bytes(1, byteorder='little')
                 deps_bytes += [len_byte]
                 deps_bytes += mem_bytes
-                deps_size += 1 + 4 * len(mem_deps)
+                deps_size += 1 + 8 * len(mem_deps)
             
             # 2. write dependencies 
             write_to_pseudo_file(str(deps_size), "/sys/x86-executor/deps_size")
@@ -135,10 +137,10 @@ class X86Intel(Executor):
                     raise Exception()
             
             # 3. write delta_threshold
-            write_to_pseudo_file(str(CONF.equivalence_class_boost_nr), "/sys/x86-executor/deltas_threshold")
+            write_to_pseudo_file(str(CONF.boost_threshold), "/sys/x86-executor/delta_threshold")
 
             # 4. prepare delta_inputs
-            delta_inputs = [old_inputs[i].to_bytes(8, byteorder='little') for i in range(CONF.equivalence_class_boost_nr, len(inputs))]
+            delta_inputs = [old_inputs[i].to_bytes(8, byteorder='little') for i in range(CONF.boost_threshold, len(inputs))]
             delta_inputs_bytes = bytes().join(delta_inputs)
 
             # 5. write delta_inputs
