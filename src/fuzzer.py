@@ -207,7 +207,7 @@ class Fuzzer:
         while violations:
             self.logger.priming(len(violations))
             violation: EquivalenceClass = violations.pop()
-            if self.verify_with_priming(violation, executor, inputs):
+            if self.verify_with_priming(violation, executor, inputs, deltas=deltas):
                 break
         else:
             # all violations were cleaned. all good
@@ -217,11 +217,12 @@ class Fuzzer:
         return violation
 
     def verify_with_priming(self, violation: EquivalenceClass, executor: Executor,
-                            inputs: List[Input]) -> bool:
+                            inputs: List[Input], deltas: List = []) -> bool:
         ordered_htraces = sorted(violation.htrace_groups.keys(),
                                  key=lambda x: bit_count(x),
                                  reverse=False)
         original_groups = violation.htrace_groups
+        print(f"Original Groups: {original_groups}")
 
         for primer_htrace in ordered_htraces:
             # list of inputs to be tested
@@ -276,6 +277,9 @@ class Fuzzer:
             multiprimer = []
             for _ in range(num_primed_inputs):
                 multiprimer.extend(primer)
+            print(f"Primer size: {primer_size} Primer start: {primer_start} Primer end: {primer_end}")
+            print(f"Primer {primer}")
+            print(f"Multiprimer {multiprimer}")
 
             # check if the hardware trace of the target_id matches
             # the hardware trace received with the primer
@@ -323,6 +327,14 @@ class Fuzzer:
         num_measurements: int = CONF.num_measurements
         for i in range(retries):
             mismatch = False
+            # MG-TODO: Here we need to realign the inputs and deltas!
+            # How can we do it?
+            # Two limitations: 
+            ## 1) Right now the hw implementation requires that inputs are split such that 
+            ## all inputs in position < threshold are run without delta
+            ## all inputs in position > threshold are run with delta
+            ## 2) All inputs in position > threshold are mapped to the corresponding non-delta input
+            ## by modulo-indexing :-|
             primed_traces: List[HTrace] = executor.trace_test_case(inputs, num_measurements)
             for j in range(num_inputs):
                 id_ = (primer_size - 1) + j * primer_size
