@@ -244,7 +244,8 @@ class Fuzzer:
                 index = (i + 1) * primer_size - 1
                 multiprimer[index] = violation.inputs[id_]
                 pos = violation.original_positions[id_]
-                mp_deps[index] = deps[pos]
+                if len(deps) > 0:
+                    mp_deps[index] = deps[pos]
 
             # try swapping
             reproduced = self.check_multiprimer(executor,
@@ -276,8 +277,10 @@ class Fuzzer:
             primer_start = primer_end - primer_size
             primer = inputs[primer_start:primer_end] if primer_start >= 0 else \
                 inputs[primer_start:] + inputs[0:primer_end]
-            p_deps = deps[primer_start:primer_end] if primer_start >= 0 else \
-                deps[primer_start:] + deps[0:primer_end]
+            p_deps = []
+            if len(deps) > 0:
+                p_deps = deps[primer_start:primer_end] if primer_start >= 0 else \
+                    deps[primer_start:] + deps[0:primer_end]
 
             multiprimer = []
             mp_deps = []
