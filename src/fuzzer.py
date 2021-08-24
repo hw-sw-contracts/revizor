@@ -19,7 +19,7 @@ from input_generator import InputGenerator, RandomInputGenerator
 from coverage import Coverage, get_coverage
 from helpers import *
 from custom_types import Dict, CTrace, HTrace, EquivalenceClass, EquivalenceClassMap, Input, \
-    Optional
+    Optional, Dependencies
 from config import CONF
 
 
@@ -170,10 +170,10 @@ class Fuzzer:
         # by default, we test without nested misprediction,
         # but retry with nesting upon a violation
         for nesting in [1, CONF.max_nesting]:
-            ctraces, deltas = model.trace_test_case(inputs, nesting)
+            ctraces, deps = model.trace_test_case(inputs, nesting)
 
             # Initial measurement
-            htraces: List[HTrace] = executor.trace_test_case(inputs, deltas=deltas)
+            htraces: List[HTrace] = executor.trace_test_case(inputs, deps=deps)
 
             # for debugging
             if CONF.verbose == 999:
@@ -207,7 +207,7 @@ class Fuzzer:
         while violations:
             self.logger.priming(len(violations))
             violation: EquivalenceClass = violations.pop()
-            if self.verify_with_priming(violation, executor, inputs, deltas=deltas):
+            if self.verify_with_priming(violation, executor, inputs, deps=deps):
                 break
         else:
             # all violations were cleaned. all good
@@ -217,12 +217,11 @@ class Fuzzer:
         return violation
 
     def verify_with_priming(self, violation: EquivalenceClass, executor: Executor,
-                            inputs: List[Input], deltas: List = []) -> bool:
+                            inputs: List[Input], deps: List[Dependencies] = []) -> bool:
         ordered_htraces = sorted(violation.htrace_groups.keys(),
                                  key=lambda x: bit_count(x),
                                  reverse=False)
         original_groups = violation.htrace_groups
-        print(f"Original Groups: {original_groups}")
 
         for primer_htrace in ordered_htraces:
             # list of inputs to be tested
@@ -234,22 +233,26 @@ class Fuzzer:
             # create a multiprimer based on the last element in the group
             priming_group_member = original_groups[primer_htrace][-1]
             target_id = violation.original_positions[priming_group_member]
-            multiprimer = self.get_min_primer(executor, inputs, target_id,
-                                              primer_htrace, len(primed_ids))
+            multiprimer, mp_deps = self.get_min_primer(executor, inputs, target_id,
+                                              primer_htrace, len(primed_ids), deps=deps)
             if not multiprimer:
                 return False
             primer_size = len(multiprimer) // len(primed_ids)
 
             # insert the tested inputs into their places
             for i, id_ in enumerate(primed_ids):
-                multiprimer[(i + 1) * primer_size - 1] = violation.inputs[id_]
+                index = (i + 1) * primer_size - 1
+                multiprimer[index] = violation.inputs[id_]
+                pos = violation.original_positions[id_]
+                mp_deps[index] = deps[pos]
 
             # try swapping
             reproduced = self.check_multiprimer(executor,
                                                 multiprimer,
                                                 primer_size,
                                                 primer_htrace,
-                                                CONF.priming_retries)
+                                                CONF.priming_retries, 
+                                                deps = mp_deps)
             if not reproduced:
                 return True
 
@@ -263,7 +266,7 @@ class Fuzzer:
         return False
 
     def get_min_primer(self, executor, inputs, target_id,
-                       expected_htrace, num_primed_inputs) -> List[Input]:
+                       expected_htrace, num_primed_inputs, deps=[]) -> List[Input]:
         # first size to be tested
         primer_size = CONF.min_primer_size % len(inputs) + 1
 
@@ -273,33 +276,34 @@ class Fuzzer:
             primer_start = primer_end - primer_size
             primer = inputs[primer_start:primer_end] if primer_start >= 0 else \
                 inputs[primer_start:] + inputs[0:primer_end]
+            p_deps = deps[primer_start:primer_end] if primer_start >= 0 else \
+                deps[primer_start:] + deps[0:primer_end]
 
             multiprimer = []
+            mp_deps = []
             for _ in range(num_primed_inputs):
                 multiprimer.extend(primer)
-            print(f"Primer size: {primer_size} Primer start: {primer_start} Primer end: {primer_end}")
-            print(f"Primer {primer}")
-            print(f"Multiprimer {multiprimer}")
+                mp_deps.extend(p_deps)
 
             # check if the hardware trace of the target_id matches
             # the hardware trace received with the primer
             primer_found = self.check_multiprimer(executor, multiprimer,
-                                                  primer_size, expected_htrace, 1)
+                                                  primer_size, expected_htrace, 1, deps=mp_deps)
 
             if primer_found:
-                return multiprimer
+                return multiprimer, mp_deps
 
             # run out of inputs to test?
             if primer_size >= len(inputs):
                 # maybe, we have too few executions; try with more
                 primer_found = self.check_multiprimer(executor, multiprimer, primer_size,
                                                       expected_htrace,
-                                                      CONF.priming_retries)
+                                                      CONF.priming_retries, deps=mp_deps)
                 if not primer_found:
                     print("Could not reproduce previous results with priming.")
                     STAT.broken_measurements += 1
                     return []
-                return multiprimer
+                return multiprimer, mp_deps
 
             # if a larger primer is allowed, try adding more inputs
             if primer_size <= CONF.max_primer_size:
@@ -308,7 +312,7 @@ class Fuzzer:
 
             # otherwise, we failed to find a primer
             print("Failed to find a primer - max_primer_size reached")
-            return []
+            return [], []
 
     def store_test_case(self, require_retires: bool):
         if not self.work_dir:
@@ -322,20 +326,13 @@ class Fuzzer:
 
     @staticmethod
     def check_multiprimer(executor: Executor, inputs: List[int], primer_size: int,
-                          expected_htrace: HTrace, retries: int) -> bool:
+                          expected_htrace: HTrace, retries: int, deps:List[Dependencies] = []) -> bool:
         num_inputs = len(inputs) // primer_size
         num_measurements: int = CONF.num_measurements
         for i in range(retries):
             mismatch = False
-            # MG-TODO: Here we need to realign the inputs and deltas!
-            # How can we do it?
-            # Two limitations: 
-            ## 1) Right now the hw implementation requires that inputs are split such that 
-            ## all inputs in position < threshold are run without delta
-            ## all inputs in position > threshold are run with delta
-            ## 2) All inputs in position > threshold are mapped to the corresponding non-delta input
-            ## by modulo-indexing :-|
-            primed_traces: List[HTrace] = executor.trace_test_case(inputs, num_measurements)
+
+            primed_traces: List[HTrace] = executor.trace_test_case(inputs, deps=deps, num_measurements=num_measurements, priming = True)
             for j in range(num_inputs):
                 id_ = (primer_size - 1) + j * primer_size
                 if primed_traces[id_] != expected_htrace:

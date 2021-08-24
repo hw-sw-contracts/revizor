@@ -111,6 +111,7 @@ class ConfCls:
     randomized_mem_alignment: bool = True
     equivalence_class_boost : bool = True
     equivalence_class_boost_nr : int = 5
+    boost_threshold: int = 0
     # ==============================================================================================
     # Model
     model: str = 'x86-unicorn'

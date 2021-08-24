@@ -11,7 +11,7 @@ import subprocess
 import os.path
 
 from helpers import assemble, load_measurement, write_to_pseudo_file, write_to_pseudo_file_bytes
-from custom_types import List, Tuple, CombinedHTrace
+from custom_types import List, Tuple, CombinedHTrace, Dependencies
 from config import CONF
 
 
@@ -23,7 +23,7 @@ class Executor(ABC):
         pass
 
     @abstractmethod
-    def trace_test_case(self, inputs: List[int], deltas:List, num_measurements: int = 0) \
+    def trace_test_case(self, inputs: List[int], deps:List[Dependencies] = [], num_measurements: int = 0) \
             -> List[CombinedHTrace]:
         pass
 
@@ -55,9 +55,9 @@ class X86Intel(Executor):
         assemble(test_case_asm, 'generated.o')
         write_to_pseudo_file("generated.o", "/sys/x86-executor/code")
 
-    def trace_test_case(self, inputs: List[int], deltas:List = [], num_measurements: int = 0) \
+    def trace_test_case(self, inputs: List[int], deps:List[Dependencies] = [], num_measurements: int = 0, priming: bool = False) \
             -> List[CombinedHTrace]:
-
+            
         # make sure it's not a dummy call
         if not inputs:
             return []
@@ -67,23 +67,38 @@ class X86Intel(Executor):
             print("Error: x86 Intel Executor: kernel module not loaded")
 
         # change inputs if there are delta snapshots
-        old_inputs = inputs.copy()
-        if deltas != []:
+        inputs_ = inputs.copy()
+        if deps != []:
 
-            if len(inputs) != len(deltas):
-                print("Lenght of inputs and deltas is different!")
+            if len(inputs) != len(deps):
+                print("Lenght of inputs and deps is different!")
                 exit(1)
 
             if not(CONF.equivalence_class_boost):
-                print("Deltas are unsupported")
+                print("Deps are unsupported")
                 exit(1)
+
             dependencies = []
-            for i in range(len(inputs)):
-                if i < CONF.boost_threshold:
-                    dependencies.append(deltas[i])
-                else:
-                    # i >= CONF.boost_threshold: replace input
-                    inputs[i] = old_inputs[deltas[i]]
+            delta_inputs = []
+            if not priming:
+                delta_inputs = [inputs_[i] for i in range(CONF.boost_threshold, len(inputs_))]
+                for i in range(len(inputs_)):
+                    if i < CONF.boost_threshold:
+                        dependencies.append(deps[i][2])
+                    else:
+                        # i >= CONF.boost_threshold: replace input
+                        inputs_[i] = deps[i][1]
+            else:
+                inputs_ = [d[1] for d in deps ]
+                delta_inputs = [d[0] for d in deps]
+                dependencies = [d[2] for d in deps]
+
+            # for i in range(len(inputs_)):
+            #     if i < CONF.boost_threshold:
+            #         dependencies.append(deltas[i])
+            #     else:
+            #         # i >= CONF.boost_threshold: replace input
+            #         inputs_[i] = old_inputs[deltas[i]]
 
         if num_measurements == 0:
             num_measurements = CONF.num_measurements
@@ -93,12 +108,11 @@ class X86Intel(Executor):
         write_to_pseudo_file(input_mask, '/sys/x86-executor/input_mask')
 
         # convert the inputs into a byte sequence
-        qword_inputs = [i.to_bytes(8, byteorder='little') for i in inputs]
-        byte_inputs = bytes().join(qword_inputs)
+        byte_inputs = bytes().join([ i.to_bytes(8, byteorder='little') for i in inputs_ ])
 
         # protocol of loading inputs (must be in this order):
         # 1) Announce the number of inputs
-        write_to_pseudo_file(str(len(inputs)), "/sys/x86-executor/n_inputs")
+        write_to_pseudo_file(str(len(inputs_)), "/sys/x86-executor/n_inputs")
         # 2) Load the inputs
         write_to_pseudo_file_bytes(byte_inputs, "/sys/x86-executor/inputs")
         # 3) Check that the load was successful
@@ -108,7 +122,7 @@ class X86Intel(Executor):
                 raise Exception()
 
         # 4) Write the delta information
-        if deltas != []:
+        if deps != []:
             # 1. prepare dependencies 
             deps_size = 0
             deps_bytes = []
@@ -137,11 +151,13 @@ class X86Intel(Executor):
                     raise Exception()
             
             # 3. write delta_threshold
-            write_to_pseudo_file(str(CONF.boost_threshold), "/sys/x86-executor/delta_threshold")
+            if not priming:
+                write_to_pseudo_file(str(CONF.boost_threshold), "/sys/x86-executor/delta_threshold")
+            else:
+                write_to_pseudo_file(str(0), "/sys/x86-executor/delta_threshold")
 
             # 4. prepare delta_inputs
-            delta_inputs = [old_inputs[i].to_bytes(8, byteorder='little') for i in range(CONF.boost_threshold, len(inputs))]
-            delta_inputs_bytes = bytes().join(delta_inputs)
+            delta_inputs_bytes = bytes().join( [ i.to_bytes(8, byteorder='little') for i in delta_inputs ] )
 
             # 5. write delta_inputs
             write_to_pseudo_file(str(len(delta_inputs)), "/sys/x86-executor/delta_inputs_size")
@@ -151,8 +167,8 @@ class X86Intel(Executor):
                     print("Failure loading delta inputs!")
                     raise Exception()
 
-        traces = [[] for _ in inputs]
-        pfc_readings = [[[], [], []] for _ in inputs]
+        traces = [[] for _ in inputs_]
+        pfc_readings = [[[], [], []] for _ in inputs_]
         for _ in range(num_measurements):
             # measure
             subprocess.run(f"taskset -c {CONF.measurement_cpu} cat /proc/x86-executor "
@@ -171,7 +187,7 @@ class X86Intel(Executor):
             return [t[0] for t in traces]
 
         # remove outliers and merge
-        merged_traces = [0 for _ in inputs]
+        merged_traces = [0 for _ in inputs_]
         for i, trace_list in enumerate(traces):
             num_occurrences = Counter()
             for trace in trace_list:
@@ -186,7 +202,7 @@ class X86Intel(Executor):
                     merged_traces[i] |= trace
 
         # same for PFC readings, except select max. values instead of merging
-        filtered_pfc_readings = [[0, 0, 0] for _ in inputs]
+        filtered_pfc_readings = [[0, 0, 0] for _ in inputs_]
         for i, reading_lists in enumerate(pfc_readings):
             num_occurrences = Counter()
 

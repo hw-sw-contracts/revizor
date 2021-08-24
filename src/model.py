@@ -253,7 +253,7 @@ class X86UnicornModel(Model):
 
         traces = []
         full_execution_traces = []
-        deltas = []
+        deps = []
         for i, input_ in enumerate(inputs):
             if not(CONF.equivalence_class_boost) or i < CONF.boost_threshold:
                 try:
@@ -283,12 +283,14 @@ class X86UnicornModel(Model):
                 traces.append(self.tracer.get_trace())
                 full_execution_traces.append(self.tracer.get_full_execution_trace())
 
-
                 if self.dependencyTracker is not None:
                     dependencies = self.dependencyTracker.get_observed_dependencies()
                     self.reset_emulator(input_)
                     delta = self.get_emulator_values(dependencies)
-                    deltas.append(delta)
+                    # entry is 1) base input value, 2) target input value, 3) dependencies values
+                    # base and target inputs are the same since there is no boosting!
+                    entry = (input_, input_, delta )
+                    deps.append(entry)
                     # if self.debug:
                     #     print(f"DEPENDENCIES: {dependencies}")
                     #     print(f"DELTA {delta}")
@@ -298,7 +300,12 @@ class X86UnicornModel(Model):
                 full_execution_trace = full_execution_traces[index]
                 traces.append(trace)
                 full_execution_traces.append(full_execution_trace)
-                deltas.append(index)
+
+                baseInput = input_
+                targetInput = inputs[index]
+                delta = deps[index][2]
+                entry = (baseInput, targetInput, delta)
+                deps.append(entry)
                 
                 # if self.debug:
                 #     delta = deltas[index]
@@ -345,7 +352,7 @@ class X86UnicornModel(Model):
         if self.coverage_tracker:
             self.coverage_tracker.model_hook(full_execution_traces)
 
-        return (traces, deltas)
+        return (traces, deps)
 
     def reset_emulator(self, seed):
         self.checkpoints = []
