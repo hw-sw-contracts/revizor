@@ -244,7 +244,7 @@ class Dummy(Executor):
     def load_test_case(self, test_case_asm: str):
         pass
 
-    def trace_test_case(self, inputs: List[int], deltas:List = [], num_measurements: int = 0) \
+    def trace_test_case(self, inputs: List[int], deps:List = [], num_measurements: int = 0) \
             -> List[CombinedHTrace]:
         return [0 for i in range (0, len(inputs))]
 

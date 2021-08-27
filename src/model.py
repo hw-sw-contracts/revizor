@@ -111,6 +111,9 @@ class L1DTracer(X86UnicornTracer):
         else:
             self.trace[0] |= cache_set_index
         # print(f"{cache_set_index:064b}")
+        if model.dependencyTracker is not None:
+            # Update the tracking with the address labels
+            model.dependencyTracker.observeInstruction("OPS")
         super(L1DTracer, self).observe_mem_access(access, address, size, value, model)
 
     def observe_instruction(self, address: int, size: int, model):
@@ -147,12 +150,19 @@ class CTTracer(MemoryTracer):
         super(CTTracer, self).observe_instruction(address, size, model)
 
 
-class CTNonSpecStoreTracer(CTTracer):
+# MG - Shouldn't CTNonSpecStoreTracer be a subclass of PCTracer and not of CTTracer (as before)??
+# Otherwise, the address is *always* traced by MemoryTracer (independently of 
+# whether it's a non-spec meme access or a spec load)
+class CTNonSpecStoreTracer(PCTracer):
     def observe_mem_access(self, access, address, size, value, model):
         if not model.in_speculation:  # all non-spec mem accesses
             self.trace.append(address)
-        if access == UC_MEM_READ:  # and speculative loads
+            if model.dependencyTracker is not None:
+                model.dependencyTracker.observeInstruction("OPS")
+        elif access == UC_MEM_READ:  # and speculative loads
             self.trace.append(address)
+            if model.dependencyTracker is not None:
+                model.dependencyTracker.observeInstruction("OPS")
         super(CTNonSpecStoreTracer, self).observe_mem_access(access, address, size, value, model)
 
 
@@ -686,6 +696,7 @@ class X86UnicornSeq(X86UnicornModel):
     @staticmethod
     def trace_code(emulator: Uc, address, size, model) -> None:
         if model.dependencyTracker is not None:
+            # Whenever we fetch a new instruction, we update the tracking data
             model.dependencyTracker.finalizeTracking()
             code = bytes(emulator.mem_read(address, size))
             model.dependencyTracker.initialize(code)
@@ -996,8 +1007,13 @@ def get_model(bases) -> Model:
             exit(1)
 
         if CONF.equivalence_class_boost:
+            ## 64-bits only
             model.dependencyTracker = DependencyTracker(64)
-
+            if CONF.contract_observation_mode == 'ctr' or CONF.contract_observation_mode == 'arch':
+                initObs = ["RAX", "RBX", "RCX", "RDX", "CF", "PF", "AF", "ZF", "SF", "TF", "IF", "DF", "OF", "AC"]
+                model.dependencyTracker = DependencyTracker(64, initialObservations = initObs)
+            else:
+                model.dependencyTracker = DependencyTracker(64)
         return model
     else:
         print("Error: unknown value of `model` configuration option")

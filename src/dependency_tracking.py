@@ -163,7 +163,10 @@ def registerDeps(reg:str) -> set:
 
 class DependencyTracker:
 
-    def __init__(self, code_biteness):
+    ## TODO: 
+    # 1) When we observe an instruction operands, right now we do not distinguish between 1st and 2nd operand. Fix that!!
+
+    def __init__(self, code_biteness, initialObservations = []):
         self.flagTracking = {}
         self.regTracking = {}
         self.memTracking = {}
@@ -175,14 +178,15 @@ class DependencyTracker:
         self.trgFlags = set()
         self.trgMems = set()
         self.debug = False
-        self.observedLabels = set()
+        self.initialObservations = initialObservations
+        self.observedLabels = set(self.initialObservations)
         self.strictUndefined = True
 
     def reset(self):
         self.flagTracking = {}
         self.regTracking = {}
         self.memTracking = {}
-        self.observedLabels = set()
+        self.observedLabels = set(self.initialObservations)
         self.srcRegs = set()
         self.srcFlags = set()
         self.srcMems = set()
@@ -190,11 +194,8 @@ class DependencyTracker:
         self.trgFlgs = set()
         self.trgMems = set()
 
-
-
     def initialize(self, instruction):
         ## Collect source and target registers/flags
-        ## Set everything up to detect 
 
         self.srcRegs = set()
         self.srcFlags = set()
@@ -251,7 +252,6 @@ class DependencyTracker:
                 print(f"    Source Flags: {self.srcFlags}")
                 print(f"    Target Flags: {self.trgFlags}")
 
-
             index = index + 1
             assert(index <= 1)
 
@@ -299,6 +299,8 @@ class DependencyTracker:
             print(f"Memory: {self.memTracking}")
 
     def observeInstruction(self, mode):
+        if self.debug:
+            print(f"ObservedLabels: {self.observedLabels}")
         if mode == "PC":
             self.observedLabels = self.observedLabels.union(getRegisterLabel(self.regTracking, "PC"))
         elif mode == "OPS":
@@ -311,6 +313,8 @@ class DependencyTracker:
             print(f"ObserveInstruction {mode} : {self.observedLabels}")
 
     def observerMemoryAddress(self, address:int, size:int):
+        if self.debug:
+            print(f"ObservedLabels: {self.observedLabels}")
         for i in range(0,size):
             self.observedLabels = self.observedLabels.union(getMemLabel(self.memTracking, addr+i))
         if self.debug:
@@ -320,7 +324,7 @@ class DependencyTracker:
         self.flagTracking = {}
         self.regTracking = {}
         self.memTracking = {}
-        self.observedLabels = set()
+        self.observedLabels = set(self.initialObservations)
 
     def restoreState(self, flagTracking, regTracking, memTracking, observedLabels):
         self.flagTracking = flagTracking
