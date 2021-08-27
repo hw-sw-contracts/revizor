@@ -687,15 +687,16 @@ class X86UnicornSeq(X86UnicornModel):
     """
 
     @staticmethod
-    def trace_mem_access(emulator, access, address: int, size, value, model):
-        if model.dependencyTracker is not None:
+    def trace_mem_access(emulator, access, address: int, size, value, model, tracking = True):
+        if (model.dependencyTracker is not None) and tracking:
+            # Track the memory access
             mode = "WRITE" if access == UC_MEM_WRITE else "READ"
             model.dependencyTracker.trackMemoryAccess(address,size,mode)
         model.tracer.observe_mem_access(access, address, size, value, model)
 
     @staticmethod
-    def trace_code(emulator: Uc, address, size, model) -> None:
-        if model.dependencyTracker is not None:
+    def trace_code(emulator: Uc, address, size, model, tracking = True) -> None:
+        if (model.dependencyTracker is not None) and tracking:
             # Whenever we fetch a new instruction, we update the tracking data
             model.dependencyTracker.finalizeTracking()
             code = bytes(emulator.mem_read(address, size))
@@ -719,7 +720,12 @@ class X86UnicornSpec(X86UnicornModel):
         super(X86UnicornSpec, self).__init__(*args)
 
     @staticmethod
-    def trace_mem_access(emulator, access, address, size, value, model):
+    def trace_mem_access(emulator, access, address, size, value, model, tracking = True):
+        if (model.dependencyTracker is not None) and tracking:
+            # Track the memory access
+            mode = "WRITE" if access == UC_MEM_WRITE else "READ"
+            model.dependencyTracker.trackMemoryAccess(address,size,mode)
+
         # when in speculation, log all changes to memory
         if access == UC_MEM_WRITE and model.store_logs:
             model.store_logs[-1].append((address, emulator.mem_read(address, 8)))
@@ -727,7 +733,13 @@ class X86UnicornSpec(X86UnicornModel):
         model.tracer.observe_mem_access(access, address, size, value, model)
 
     @staticmethod
-    def trace_code(emulator: Uc, address, size, model) -> None:
+    def trace_code(emulator: Uc, address, size, model, tracking = True) -> None:
+        if (model.dependencyTracker is not None) and tracking:
+            # Whenever we fetch a new instruction, we update the tracking data
+            model.dependencyTracker.finalizeTracking()
+            code = bytes(emulator.mem_read(address, size))
+            model.dependencyTracker.initialize(code)
+
         model.speculation_window += 1
 
         if model.in_speculation:
@@ -749,6 +761,8 @@ class X86UnicornSpec(X86UnicornModel):
         self.checkpoints.append((context, next_instruction, flags, spec_window))
         self.store_logs.append([])
         self.in_speculation = True
+        if self.dependencyTracker is not None:
+            self.dependencyTracker.checkpoint()
 
     def rollback(self):
         # restore register values
@@ -773,6 +787,10 @@ class X86UnicornSpec(X86UnicornModel):
 
         # restore the flags last, to avoid corruption by other operations
         self.emulator.reg_write(UC_X86_REG_EFLAGS, flags)
+
+        # restrore the dependency tracking
+        if self.dependencyTracker is not None:
+            self.dependencyTracker.rollback()
 
         # restart without misprediction
         self.emulator.emu_start(next_instr, self.code_base + len(self.code),
@@ -839,8 +857,8 @@ class X86UnicornCond(X86UnicornSpec):
     }
 
     @staticmethod
-    def trace_code(emulator: Uc, address, size, model) -> None:
-        X86UnicornSpec.trace_code(emulator, address, size, model)
+    def trace_code(emulator: Uc, address, size, model, tracking = True) -> None:
+        X86UnicornSpec.trace_code(emulator, address, size, model, tracking)
 
         # reached max spec. window? skip
         if len(model.checkpoints) >= model.nesting:
@@ -887,7 +905,7 @@ class X86UnicornCond(X86UnicornSpec):
 
 class X86UnicornBpas(X86UnicornSpec):
     @staticmethod
-    def trace_mem_access(emulator, access, address, size, value, model):
+    def trace_mem_access(emulator, access, address, size, value, model, tracking = True):
         """
         Since Unicorn does not have post-instruction hooks,
         I have to implement it in a dirty way:
@@ -900,11 +918,11 @@ class X86UnicornBpas(X86UnicornSpec):
             if opcode not in [0xE8, 0xFF, 0x9A]:  # ignore CALL instructions
                 model.previous_store = (address, size, emulator.mem_read(address, size), value)
 
-        X86UnicornSpec.trace_mem_access(emulator, access, address, size, value, model)
+        X86UnicornSpec.trace_mem_access(emulator, access, address, size, value, model, tracking)
 
     @staticmethod
-    def trace_code(emulator: Uc, address, size, model) -> None:
-        X86UnicornSpec.trace_code(emulator, address, size, model)
+    def trace_code(emulator: Uc, address, size, model, tracking = True) -> None:
+        X86UnicornSpec.trace_code(emulator, address, size, model, tracking)
 
         # reached max spec. window? skip
         if len(model.checkpoints) >= model.nesting:
@@ -930,8 +948,8 @@ class X86UnicornNull(X86UnicornSpec):
     instruction_address: int
 
     @staticmethod
-    def trace_mem_access(emulator, access, address, size, value, model):
-        X86UnicornSpec.trace_mem_access(emulator, access, address, size, value, model)
+    def trace_mem_access(emulator, access, address, size, value, model, tracking = True):
+        X86UnicornSpec.trace_mem_access(emulator, access, address, size, value, model, tracking)
 
         # reached max spec. window? skip
         if len(model.checkpoints) >= model.nesting:
@@ -954,21 +972,25 @@ class X86UnicornNull(X86UnicornSpec):
         emulator.mem_write(address, zero_value)
 
     @staticmethod
-    def trace_code(emulator: Uc, address, size, model) -> None:
-        X86UnicornSpec.trace_code(emulator, address, size, model)
+    def trace_code(emulator: Uc, address, size, model, tracking = True) -> None:
+        X86UnicornSpec.trace_code(emulator, address, size, model, tracking)
         model.instruction_address = address
 
 
 class X86UnicornCondBpas(X86UnicornSpec):
     @staticmethod
-    def trace_mem_access(emulator, access, address, size, value, model):
-        X86UnicornBpas.trace_mem_access(emulator, access, address, size, value, model)
+    def trace_mem_access(emulator, access, address, size, value, model, tracking = True):
+        X86UnicornBpas.trace_mem_access(emulator, access, address, size, value, model, tracking)
 
     @staticmethod
-    def trace_code(emulator: Uc, address, size, model):
-        X86UnicornCond.trace_code(emulator, address, size, model)
-        X86UnicornBpas.trace_code(emulator, address, size, model)
-
+    def trace_code(emulator: Uc, address, size, model, tracking = True):
+        if (model.dependencyTracker is not None) and tracking:
+            # Whenever we fetch a new instruction, we update the tracking data
+            model.dependencyTracker.finalizeTracking()
+            code = bytes(emulator.mem_read(address, size))
+            model.dependencyTracker.initialize(code)
+        X86UnicornCond.trace_code(emulator, address, size, model, tracking = False)
+        X86UnicornBpas.trace_code(emulator, address, size, model, tracking = False)
 
 def get_model(bases) -> Model:
     if CONF.model == 'x86-unicorn':

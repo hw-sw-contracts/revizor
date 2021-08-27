@@ -1,6 +1,7 @@
 from iced_x86 import *
 from typing import Dict, Sequence
 from types import ModuleType
+import copy
 
 def create_enum_dict(module: ModuleType) -> Dict[int, str]:
     return {module.__dict__[key]:key for key in module.__dict__ if isinstance(module.__dict__[key], int)}
@@ -181,6 +182,7 @@ class DependencyTracker:
         self.initialObservations = initialObservations
         self.observedLabels = set(self.initialObservations)
         self.strictUndefined = True
+        self.checkpoints = []
 
     def reset(self):
         self.flagTracking = {}
@@ -193,6 +195,7 @@ class DependencyTracker:
         self.trgRegs = set()
         self.trgFlgs = set()
         self.trgMems = set()
+        self.checkpoints = []
 
     def initialize(self, instruction):
         ## Collect source and target registers/flags
@@ -302,8 +305,10 @@ class DependencyTracker:
         if self.debug:
             print(f"ObservedLabels: {self.observedLabels}")
         if mode == "PC":
+            ## Add regLabel(PC) to the set of observed labels
             self.observedLabels = self.observedLabels.union(getRegisterLabel(self.regTracking, "PC"))
         elif mode == "OPS":
+            ## For all registers r in the instruction operands (i.e., all source registers), Add regLabel(r) to the set of observed labels
             for reg in self.srcRegs:
                 self.observedLabels = self.observedLabels.union(getRegisterLabel(self.regTracking, reg))
         else:
@@ -313,6 +318,7 @@ class DependencyTracker:
             print(f"ObserveInstruction {mode} : {self.observedLabels}")
 
     def observerMemoryAddress(self, address:int, size:int):
+        ## Add memLabel(address) to the set of observed labels
         if self.debug:
             print(f"ObservedLabels: {self.observedLabels}")
         for i in range(0,size):
@@ -321,16 +327,26 @@ class DependencyTracker:
             print(f"observerMemoryAddress {address} {size} : {self.observedLabels}")
 
     def saveState(self):
-        self.flagTracking = {}
-        self.regTracking = {}
-        self.memTracking = {}
-        self.observedLabels = set(self.initialObservations)
+        # return a copy of the tracker state!
+        return copy.deepcopy(self.flagTracking), copy.deepcopy(self.regTracking), copy.deepcopy(self.memTracking), copy.deepcopy(self.observedLabels)
 
     def restoreState(self, flagTracking, regTracking, memTracking, observedLabels):
-        self.flagTracking = flagTracking
-        self.regTracking = regTracking
-        self.memTracking = memTracking
-        self.observedLabels = observedLabels
+        self.flagTracking = copy.deepcopy(flagTracking)
+        self.regTracking = copy.deepcopy(regTracking)
+        self.memTracking = copy.deepcopy(memTracking)
+        self.observedLabels = copy.deepcopy(observedLabels)
+
+    def checkpoint(self):
+        t = self.saveState()
+        self.checkpoints.append(t)
+
+    def rollback(self):
+        if len(self.checkpoints)>0:
+            t = self.checkpoints.pop()
+            self.restoreState(*t)
+        else:
+            print("There are no more checkpoints")
+            exit(1)
 
     def get_observed_dependencies(self):
-        return self.observedLabels
+        return copy.deepcopy(self.observedLabels)
