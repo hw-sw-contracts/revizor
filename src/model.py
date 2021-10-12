@@ -12,7 +12,7 @@ from unicorn import *  # type: ignore
 from unicorn.x86_const import *  # type: ignore
 from typing import List, Tuple, Dict
 
-from interfaces import CTrace, Input, TestCase, Model
+from interfaces import CTrace, Input, TestCase, Model, InputTaint
 from config import CONF
 from dependency_tracking import DependencyTracker
 # =============================================================================
@@ -118,14 +118,14 @@ class CTTracer(MemoryTracer):
 
 # MG - Shouldn't CTNonSpecStoreTracer be a subclass of PCTracer and not of CTTracer (as before)??
 # Otherwise, the address is *always* traced by MemoryTracer (independently of 
-# whether it's a non-spec meme access or a spec load)
-class CTNonSpecStoreTracer(CTTracer):
+# whether it's a non-spec memory access or a spec load)
+class CTNonSpecStoreTracer(PCTracer):
     def observe_mem_access(self, access, address, size, value, model):
         if not model.in_speculation:  # all non-spec mem accesses
             self.trace.append(address)
             if model.dependencyTracker is not None:
                 model.dependencyTracker.observeInstruction("OPS")
-        if access == UC_MEM_READ:  # and speculative loads
+        elif access == UC_MEM_READ:  # and speculative loads
             self.trace.append(address)
             if model.dependencyTracker is not None:
                 model.dependencyTracker.observeInstruction("OPS")
@@ -177,6 +177,7 @@ class X86UnicornModel(Model):
     tracer: X86UnicornTracer
     nesting: int = 0
     debug: bool = False
+    dependencyTracker: DependencyTracker
 
     def __init__(self, sandbox_base, code_base):
         super().__init__(sandbox_base, code_base)
@@ -225,17 +226,20 @@ class X86UnicornModel(Model):
             print("Model error [load_test_case]: %s" % e)
             raise e
 
-    def trace_test_case(self, inputs: List[Input], nesting, dbg: bool = False) -> List[CTrace]:
+    def trace_test_case(self, inputs: List[Input], nesting, dbg: bool = False) -> Tuple[List[CTrace], List[InputTaint]]:
         self.nesting = nesting
         self.debug = dbg
 
         traces = []
         full_execution_traces = []
+        taints = []
         for i, input_ in enumerate(inputs):
             try:
                 self.reset_model()
                 self.reset_emulator(input_)
                 self.tracer.reset_trace(self.emulator)
+                if self.dependencyTracker is not None:
+                    self.dependencyTracker.reset()
                 self.emulator.emu_start(self.code_base, self.code_base + len(self.code),
                                         timeout=10 * UC_SECOND_SCALE)
             except UcError as e:
@@ -256,11 +260,14 @@ class X86UnicornModel(Model):
             # store the results
             traces.append(self.tracer.get_trace())
             full_execution_traces.append(self.tracer.get_full_execution_trace())
+            if self.dependencyTracker is not None:
+                dependencies = self.dependencyTracker.get_observed_dependencies()
+                taints.appends(getTaints(dependencies)) ## TODO
 
         if self.coverage:
             self.coverage.model_hook(full_execution_traces)
 
-        return traces
+        return traces, taints
 
     def reset_emulator(self, input_: Input):
         self.checkpoints = []
