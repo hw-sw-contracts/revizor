@@ -262,12 +262,91 @@ class X86UnicornModel(Model):
             full_execution_traces.append(self.tracer.get_full_execution_trace())
             if self.dependencyTracker is not None:
                 dependencies = self.dependencyTracker.get_observed_dependencies()
-                taints.appends(getTaints(dependencies)) ## TODO
+                taints.appends(get_taint(dependencies)) ## TODO
 
         if self.coverage:
             self.coverage.model_hook(full_execution_traces)
 
         return traces, taints
+
+    def get_taint(self, dependencies) -> InputTaint:
+        ## TODO
+        def get_input_position(dependency):
+            def get_register(reg):
+                regDict = { 
+                    "RAX": UC_X86_REG_RAX,
+                    "RBX": UC_X86_REG_RBX,
+                    "RCX": UC_X86_REG_RCX,
+                    "RDX": UC_X86_REG_RDX,
+                    "RDI": UC_X86_REG_RDI,
+                    "RSI": UC_X86_REG_RSI,
+                    "RSP": UC_X86_REG_RSP,
+                    "RBP": UC_X86_REG_RBP,
+                    "R8": UC_X86_REG_R8,
+                    "R9": UC_X86_REG_R9,
+                    "R10": UC_X86_REG_R10,
+                    "R11": UC_X86_REG_R11,
+                    "R12": UC_X86_REG_R12,
+                    "R13": UC_X86_REG_R13,
+                    "R14": UC_X86_REG_R14,
+                }
+
+                if reg in {"CF", "PF", "AF", "ZF", "SF", "TF", "IF", "DF", "OF", "AC"}:
+                    return UC_X86_REG_EFLAGS
+                else:
+                    for i in {"A","B","C","D"}:
+                        if reg ==  f"R{i}X":
+                            return regDict[f"R{i}X"]
+                        elif reg == f"E{i}X":
+                            return regDict[f"R{i}X"]
+                        elif reg == f"{i}X":
+                            return regDict[f"R{i}X"]
+                        elif reg == f"{i}L":
+                            return regDict[f"R{i}X"]
+                        elif reg == f"{i}H":
+                            return regDict[f"R{i}X"]
+
+                    
+                    for i in {"BP","SI","DI","SP", "IP"}:
+                        if reg == f"R{i}":
+                            return regDict[f"R{i}"]
+                        elif reg == f"E{i}":
+                            return regDict[f"R{i}"]
+                        elif reg == f"{i}":
+                            return regDict[f"R{i}"]
+                        elif reg == f"{i}L":
+                            return regDict[f"R{i}"]
+
+                    for i in range(8,16):
+                        if reg == f"R{i}":
+                            return regDict[f"R{i}"]
+                        elif reg ==  f"R{i}D":
+                            return regDict[f"R{i}"]
+                        elif reg ==  f"R{i}W":
+                            return regDict[f"R{i}"]
+                        elif reg ==  f"R{i}B":
+                            return regDict[f"R{i}"]
+                    
+                    print(f"Unsupported identifier {reg}")
+                    exit(1)
+
+            if type(dependency) is int:
+                # memory address
+                return 0 ## TODO
+            elif type(dependency) is str:
+                # flag register
+                registers = [UC_X86_REG_RAX, UC_X86_REG_RBX, UC_X86_REG_RCX, UC_X86_REG_RDX,
+                     UC_X86_REG_RSI, UC_X86_REG_RDI, UC_X86_REG_EFLAGS]
+                return registers.index(get_register(dependency)) % (CONF.input_main_region_size + CONF.input_assist_region_size + CONF.input_register_region_size)
+
+        taint = InputTaint()
+        tainted_positions = [get_input_position(d) for d in dependencies].sort()
+        for i in range(CONF.input_main_region_size + CONF.input_assist_region_size + CONF.input_register_region_size):
+            if i in tainted_positions:
+                taint[i] = True
+            else:
+                taint[i] = False
+        return taint
 
     def reset_emulator(self, input_: Input):
         self.checkpoints = []
@@ -694,9 +773,8 @@ def get_model(bases: Tuple[int, int]) -> Model:
             print("Error: unknown value of `contract_observation_mode` configuration option")
             exit(1)
 
-        if CONF.equivalence_class_boost:
+        if CONF.dependency_tracking:
             ## 64-bits only
-            model.dependencyTracker = DependencyTracker(64)
             if CONF.contract_observation_mode == 'ctr' or CONF.contract_observation_mode == 'arch':
                 initObs = ["RAX", "RBX", "RCX", "RDX", "CF", "PF", "AF", "ZF", "SF", "TF", "IF", "DF", "OF", "AC"]
                 model.dependencyTracker = DependencyTracker(64, initialObservations = initObs)

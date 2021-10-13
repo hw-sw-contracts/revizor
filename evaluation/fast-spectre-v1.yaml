@@ -23,3 +23,4 @@ prng_entropy_bits: 9
 
 enable_ssbp_patch: true
 enable_mds: false
+executor: dummy
