@@ -262,7 +262,7 @@ class X86UnicornModel(Model):
             full_execution_traces.append(self.tracer.get_full_execution_trace())
             if self.dependencyTracker is not None:
                 dependencies = self.dependencyTracker.get_observed_dependencies()
-                taints.appends(get_taint(dependencies)) ## TODO
+                taints.append(self.get_taint(dependencies))
 
         if self.coverage:
             self.coverage.model_hook(full_execution_traces)
@@ -270,77 +270,85 @@ class X86UnicornModel(Model):
         return traces, taints
 
     def get_taint(self, dependencies) -> InputTaint:
-        ## TODO
-        def get_input_position(dependency):
-            def get_register(reg):
-                regDict = { 
-                    "RAX": UC_X86_REG_RAX,
-                    "RBX": UC_X86_REG_RBX,
-                    "RCX": UC_X86_REG_RCX,
-                    "RDX": UC_X86_REG_RDX,
-                    "RDI": UC_X86_REG_RDI,
-                    "RSI": UC_X86_REG_RSI,
-                    "RSP": UC_X86_REG_RSP,
-                    "RBP": UC_X86_REG_RBP,
-                    "R8": UC_X86_REG_R8,
-                    "R9": UC_X86_REG_R9,
-                    "R10": UC_X86_REG_R10,
-                    "R11": UC_X86_REG_R11,
-                    "R12": UC_X86_REG_R12,
-                    "R13": UC_X86_REG_R13,
-                    "R14": UC_X86_REG_R14,
-                }
+        def get_register(reg):
+            regDict = { 
+                "RAX": UC_X86_REG_RAX,
+                "RBX": UC_X86_REG_RBX,
+                "RCX": UC_X86_REG_RCX,
+                "RDX": UC_X86_REG_RDX,
+                "RDI": UC_X86_REG_RDI,
+                "RSI": UC_X86_REG_RSI,
+                "RSP": UC_X86_REG_RSP,
+                "RBP": UC_X86_REG_RBP,
+                "R8": UC_X86_REG_R8,
+                "R9": UC_X86_REG_R9,
+                "R10": UC_X86_REG_R10,
+                "R11": UC_X86_REG_R11,
+                "R12": UC_X86_REG_R12,
+                "R13": UC_X86_REG_R13,
+                "R14": UC_X86_REG_R14,
+            }
 
-                if reg in {"CF", "PF", "AF", "ZF", "SF", "TF", "IF", "DF", "OF", "AC"}:
-                    return UC_X86_REG_EFLAGS
-                else:
-                    for i in {"A","B","C","D"}:
-                        if reg ==  f"R{i}X":
-                            return regDict[f"R{i}X"]
-                        elif reg == f"E{i}X":
-                            return regDict[f"R{i}X"]
-                        elif reg == f"{i}X":
-                            return regDict[f"R{i}X"]
-                        elif reg == f"{i}L":
-                            return regDict[f"R{i}X"]
-                        elif reg == f"{i}H":
-                            return regDict[f"R{i}X"]
+            if reg in {"CF", "PF", "AF", "ZF", "SF", "TF", "IF", "DF", "OF", "AC"}:
+                return UC_X86_REG_EFLAGS
+            elif reg == "PC":
+                return -1
+            else:
+                for i in {"A","B","C","D"}:
+                    if reg ==  f"R{i}X":
+                        return regDict[f"R{i}X"]
+                    elif reg == f"E{i}X":
+                        return regDict[f"R{i}X"]
+                    elif reg == f"{i}X":
+                        return regDict[f"R{i}X"]
+                    elif reg == f"{i}L":
+                        return regDict[f"R{i}X"]
+                    elif reg == f"{i}H":
+                        return regDict[f"R{i}X"]
 
-                    
-                    for i in {"BP","SI","DI","SP", "IP"}:
-                        if reg == f"R{i}":
-                            return regDict[f"R{i}"]
-                        elif reg == f"E{i}":
-                            return regDict[f"R{i}"]
-                        elif reg == f"{i}":
-                            return regDict[f"R{i}"]
-                        elif reg == f"{i}L":
-                            return regDict[f"R{i}"]
+                for i in {"BP","SI","DI","SP", "IP"}:
+                    if reg == f"R{i}":
+                        return regDict[f"R{i}"]
+                    elif reg == f"E{i}":
+                        return regDict[f"R{i}"]
+                    elif reg == f"{i}":
+                        return regDict[f"R{i}"]
+                    elif reg == f"{i}L":
+                        return regDict[f"R{i}"]
 
-                    for i in range(8,16):
-                        if reg == f"R{i}":
-                            return regDict[f"R{i}"]
-                        elif reg ==  f"R{i}D":
-                            return regDict[f"R{i}"]
-                        elif reg ==  f"R{i}W":
-                            return regDict[f"R{i}"]
-                        elif reg ==  f"R{i}B":
-                            return regDict[f"R{i}"]
-                    
-                    print(f"Unsupported identifier {reg}")
-                    exit(1)
-
-            if type(dependency) is int:
+                for i in range(8,16):
+                    if reg == f"R{i}":
+                        return regDict[f"R{i}"]
+                    elif reg ==  f"R{i}D":
+                        return regDict[f"R{i}"]
+                    elif reg ==  f"R{i}W":
+                        return regDict[f"R{i}"]
+                    elif reg ==  f"R{i}B":
+                        return regDict[f"R{i}"]
+                
+                print(f"Unsupported identifier {reg}")
+                exit(1)
+                
+        taint = InputTaint()
+        tainted_positions = []
+        for d in dependencies:
+            pos = -1
+            if type(d) is int:
                 # memory address
-                return 0 ## TODO
-            elif type(dependency) is str:
+                # we taint the 64-bits block that contains the address
+                pos = (d - self.sandbox_base) // 8
+            elif type(d) is str:
                 # flag register
                 registers = [UC_X86_REG_RAX, UC_X86_REG_RBX, UC_X86_REG_RCX, UC_X86_REG_RDX,
                      UC_X86_REG_RSI, UC_X86_REG_RDI, UC_X86_REG_EFLAGS]
-                return registers.index(get_register(dependency)) % (CONF.input_main_region_size + CONF.input_assist_region_size + CONF.input_register_region_size)
+                reg = get_register(d)
+                if reg in registers:
+                    pos = CONF.input_main_region_size + CONF.input_assist_region_size + registers.index(get_register(d)) 
+            if pos != -1:
+                tainted_positions.append(pos)
 
-        taint = InputTaint()
-        tainted_positions = [get_input_position(d) for d in dependencies].sort()
+        tainted_positions = list(dict.fromkeys(tainted_positions))
+        tainted_positions.sort()
         for i in range(CONF.input_main_region_size + CONF.input_assist_region_size + CONF.input_register_region_size):
             if i in tainted_positions:
                 taint[i] = True

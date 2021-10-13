@@ -181,7 +181,9 @@ class Fuzzer:
         # by default, we test without nested misprediction,
         # but retry with nesting upon a violation
         for nesting in [1, CONF.max_nesting]:
-            ctraces: List[CTrace] = model.trace_test_case(inputs, nesting)
+            ctraces: List[CTrace]
+            taints:List[InputTaint]
+            ctraces, taints = model.trace_test_case(inputs, nesting)
 
             # for debugging
             if CONF.verbose == 999:
