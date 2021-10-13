@@ -124,7 +124,7 @@ class Fuzzer:
             inputs: List[Input] = input_gen.generate(CONF.input_generator_seed, num_inputs)
 
             # Fuzz the test case
-            violation = self.fuzzing_round(executor, model, analyser, inputs)
+            violation = self.fuzzing_round(executor, model, analyser, input_gen, inputs)
             STAT.test_cases += 1
             coverage.update()
 
@@ -169,14 +169,11 @@ class Fuzzer:
 
         self.logger.finish()
 
-    def fuzzing_round(self, executor: Executor, model: Model, analyser: Analyser,
+    def fuzzing_round(self, executor: Executor, model: Model, analyser: Analyser, input_gen: InputGenerator,
                       inputs: List[Input]) -> Optional[EquivalenceClass]:
         self.logger.start_round()
         model.load_test_case(self.test_case)
         executor.load_test_case(self.test_case)
-
-        # Initial measurement
-        htraces: List[HTrace] = executor.trace_test_case(inputs)
 
         # by default, we test without nested misprediction,
         # but retry with nesting upon a violation
@@ -184,6 +181,22 @@ class Fuzzer:
             ctraces: List[CTrace]
             taints:List[InputTaint]
             ctraces, taints = model.trace_test_case(inputs, nesting)
+
+            if taints != []: 
+                latest_inputs: List[Input] = list(inputs)
+                orig_ctraces: List[CTrace] = list(ctraces)
+                orig_taints: List[InputTaint] = list(taints)
+                for i in range(CONF.equivalence_boost):
+                    new_inputs = input_gen.extend_equivalence_classes(latest_inputs, orig_taints)
+                    ## The dependency tracking ensures that the new inputs generate (1) the same traces and (2) the same taints as the original ones
+                    ## So, no need to rerun model!
+                    inputs = inputs + new_inputs
+                    taints = taints + orig_taints
+                    ctraces = ctraces + orig_ctraces 
+                    latest_inputs = new_inputs
+
+            # Hw measurement
+            htraces: List[HTrace] = executor.trace_test_case(inputs)
 
             # for debugging
             if CONF.verbose == 999:

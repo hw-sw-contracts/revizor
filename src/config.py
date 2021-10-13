@@ -113,6 +113,7 @@ class ConfCls:
     input_main_region_size: int = 4096 // 8
     input_assist_region_size: int = (4096 - 64) // 8
     input_register_region_size: int = 64 // 8
+    equivalence_boost: int = 3
     # ==============================================================================================
     # Model
     model: str = 'x86-unicorn'
