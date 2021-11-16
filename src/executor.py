@@ -135,30 +135,9 @@ class X86Intel(Executor):
         return int(sandbox_base, 16), int(code_base, 16)
 
 
-class Dummy(Executor):
-
-    code_base: int  = 4198400 
-    sandbox_base: int = 5251072
-
-    
-    def __init__(self):
-        super().__init__()
-        
-
-    def load_test_case(self, test_case_asm: str):
-        pass
-
-    def trace_test_case(self, inputs: List[int], deps:List = [], num_measurements: int = 0) \
-            -> List[CombinedHTrace]:
-        return [0 for i in range (0, len(inputs))]
-
-    def read_base_addresses(self):
-        return self.sandbox_base, self.code_base
-
 def get_executor() -> Executor:
     options = {
         'x86-intel': X86Intel,
-        'dummy': Dummy
     }
     if CONF.executor not in options:
         print("Error: unknown executor in config.py")

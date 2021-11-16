@@ -10,11 +10,12 @@ from abc import ABC
 import numpy as np
 from unicorn import *  # type: ignore
 from unicorn.x86_const import *  # type: ignore
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional
 
 from interfaces import CTrace, Input, TestCase, Model, InputTaint
 from config import CONF
 from dependency_tracking import DependencyTracker
+
 # =============================================================================
 # Unicorn-based predictors
 # =============================================================================
@@ -47,6 +48,17 @@ class X86UnicornTracer(ABC):
     def get_full_execution_trace(self):
         return self.full_execution_trace
 
+    def add_mem_address_to_trace(self, address, model):
+        self.trace.append(address)
+        if model.dependency_tracker is not None:
+            # Update the tracking with the address labels
+            model.dependency_tracker.observe_instruction("OPS")
+
+    def add_pc_to_trace(self, address, model):
+        self.trace.append(address)
+        if model.dependency_tracker is not None:
+            model.dependency_tracker.observe_instruction("PC")
+
     def observe_mem_access(self, access, address: int, size: int, value: int, model) -> None:
         if not model.in_speculation:
             self.full_execution_trace.append((False, address - model.sandbox_base))
@@ -70,17 +82,19 @@ class L1DTracer(X86UnicornTracer):
         self.trace = [0, 0]
         self.full_execution_trace = []
 
-    def observe_mem_access(self, access, address, size, value, model):
+    def add_mem_address_to_trace(self, address, model):
         page_offset = (address & 4032) >> 6  # 4032 = 0b111111000000
         cache_set_index = 9223372036854775808 >> page_offset
+        # print(f"{cache_set_index:064b}")
         if model.in_speculation:
             self.trace[1] |= cache_set_index
         else:
             self.trace[0] |= cache_set_index
-        # print(f"{cache_set_index:064b}")
-        if model.dependencyTracker is not None:
-            # Update the tracking with the address labels
-            model.dependencyTracker.observeInstruction("OPS")
+        if model.dependency_tracker is not None:
+            model.dependency_tracker.observe_instruction("OPS")
+
+    def observe_mem_access(self, access, address, size, value, model):
+        self.add_mem_address_to_trace(address, model)
         super(L1DTracer, self).observe_mem_access(access, address, size, value, model)
 
     def observe_instruction(self, address: int, size: int, model):
@@ -95,40 +109,27 @@ class L1DTracer(X86UnicornTracer):
 
 class PCTracer(X86UnicornTracer):
     def observe_instruction(self, address: int, size: int, model):
-        self.trace.append(address)
-        if model.dependencyTracker is not None:
-            model.dependencyTracker.observeInstruction("PC")
+        self.add_pc_to_trace(address, model)
         super(PCTracer, self).observe_instruction(address, size, model)
 
 
 class MemoryTracer(X86UnicornTracer):
     def observe_mem_access(self, access, address, size, value, model):
-        self.trace.append(address)
-        if model.dependencyTracker is not None:
-            model.dependencyTracker.observeInstruction("OPS")
+        self.add_mem_address_to_trace(address, model)
         super(MemoryTracer, self).observe_mem_access(access, address, size, value, model)
 
 
-class CTTracer(MemoryTracer):
-    def observe_instruction(self, address: int, size: int, model):
-        self.trace.append(address)
-        if model.dependencyTracker is not None:
-            model.dependencyTracker.observeInstruction("PC")
+class CTTracer(PCTracer):
+    def observe_mem_access(self, access, address, size, value, model):
+        self.add_mem_address_to_trace(address, model)
         super(CTTracer, self).observe_instruction(address, size, model)
 
-# MG - Shouldn't CTNonSpecStoreTracer be a subclass of PCTracer and not of CTTracer (as before)??
-# Otherwise, the address is *always* traced by MemoryTracer (independently of 
-# whether it's a non-spec memory access or a spec load)
+
 class CTNonSpecStoreTracer(PCTracer):
     def observe_mem_access(self, access, address, size, value, model):
-        if not model.in_speculation:  # all non-spec mem accesses
-            self.trace.append(address)
-            if model.dependencyTracker is not None:
-                model.dependencyTracker.observeInstruction("OPS")
-        elif access == UC_MEM_READ:  # and speculative loads
-            self.trace.append(address)
-            if model.dependencyTracker is not None:
-                model.dependencyTracker.observeInstruction("OPS")
+        # trace all non-spec mem accesses and speculative loads
+        if not model.in_speculation or access == UC_MEM_READ:
+            self.add_mem_address_to_trace(address, model)
         super(CTNonSpecStoreTracer, self).observe_mem_access(access, address, size, value, model)
 
 
@@ -149,9 +150,9 @@ class ArchTracer(CTRTracer):
         if access == UC_MEM_READ:
             val = int.from_bytes(model.emulator.mem_read(address, size), byteorder='little')
             self.trace.append(val)
-            if self.dependencyTracker is not None:
-                self.dependencyTracker.observerMemoryAddress(address,size)
-        self.trace.append(address)
+            if model.dependency_tracker is not None:
+                model.dependency_tracker.observe_memory_address(address, size)
+        self.add_mem_address_to_trace(address, model)
         super(ArchTracer, self).observe_mem_access(access, address, size, value, model)
 
 
@@ -177,7 +178,7 @@ class X86UnicornModel(Model):
     tracer: X86UnicornTracer
     nesting: int = 0
     debug: bool = False
-    dependencyTracker: DependencyTracker
+    dependency_tracker: Optional[DependencyTracker] = None
 
     def __init__(self, sandbox_base, code_base):
         super().__init__(sandbox_base, code_base)
@@ -218,7 +219,7 @@ class X86UnicornModel(Model):
             emulator.reg_write(UC_X86_REG_R15, 0x0)
 
             emulator.hook_add(UC_HOOK_MEM_READ | UC_HOOK_MEM_WRITE, self.trace_mem_access, self)
-            emulator.hook_add(UC_HOOK_CODE, self.trace_code, self)
+            emulator.hook_add(UC_HOOK_CODE, self.trace_instruction, self)
 
             self.emulator = emulator
 
@@ -226,7 +227,8 @@ class X86UnicornModel(Model):
             print("Model error [load_test_case]: %s" % e)
             raise e
 
-    def trace_test_case(self, inputs: List[Input], nesting, dbg: bool = False) -> Tuple[List[CTrace], List[InputTaint]]:
+    def trace_test_case(self, inputs: List[Input], nesting, dbg: bool = False) -> \
+            Tuple[List[CTrace], List[InputTaint]]:
         self.nesting = nesting
         self.debug = dbg
 
@@ -238,8 +240,8 @@ class X86UnicornModel(Model):
                 self.reset_model()
                 self.reset_emulator(input_)
                 self.tracer.reset_trace(self.emulator)
-                if self.dependencyTracker is not None:
-                    self.dependencyTracker.reset()
+                if self.dependency_tracker is not None:
+                    self.dependency_tracker.reset()
                 self.emulator.emu_start(self.code_base, self.code_base + len(self.code),
                                         timeout=10 * UC_SECOND_SCALE)
             except UcError as e:
@@ -260,8 +262,8 @@ class X86UnicornModel(Model):
             # store the results
             traces.append(self.tracer.get_trace())
             full_execution_traces.append(self.tracer.get_full_execution_trace())
-            if self.dependencyTracker is not None:
-                dependencies = self.dependencyTracker.get_observed_dependencies()
+            if self.dependency_tracker is not None:
+                dependencies = self.dependency_tracker.get_observed_dependencies()
                 taints.append(self.get_taint(dependencies))
 
         if self.coverage:
@@ -270,8 +272,8 @@ class X86UnicornModel(Model):
         return traces, taints
 
     def get_taint(self, dependencies) -> InputTaint:
-        def get_register(reg):
-            regDict = { 
+        def get_register(reg_):
+            reg_dict = {
                 "RAX": UC_X86_REG_RAX,
                 "RBX": UC_X86_REG_RBX,
                 "RCX": UC_X86_REG_RCX,
@@ -287,48 +289,49 @@ class X86UnicornModel(Model):
                 "R12": UC_X86_REG_R12,
                 "R13": UC_X86_REG_R13,
                 "R14": UC_X86_REG_R14,
+                "R15": UC_X86_REG_R15,
             }
 
-            if reg in {"CF", "PF", "AF", "ZF", "SF", "TF", "IF", "DF", "OF", "AC"}:
+            if reg_ in {"CF", "PF", "AF", "ZF", "SF", "TF", "IF", "DF", "OF", "AC"}:
                 return UC_X86_REG_EFLAGS
-            elif reg == "PC":
+            elif reg_ == "PC":
                 return -1
             else:
-                for i in {"A","B","C","D"}:
-                    if reg ==  f"R{i}X":
-                        return regDict[f"R{i}X"]
-                    elif reg == f"E{i}X":
-                        return regDict[f"R{i}X"]
-                    elif reg == f"{i}X":
-                        return regDict[f"R{i}X"]
-                    elif reg == f"{i}L":
-                        return regDict[f"R{i}X"]
-                    elif reg == f"{i}H":
-                        return regDict[f"R{i}X"]
+                for j in {"A", "B", "C", "D"}:
+                    if reg_ == f"R{j}X":
+                        return reg_dict[f"R{j}X"]
+                    elif reg_ == f"E{j}X":
+                        return reg_dict[f"R{j}X"]
+                    elif reg_ == f"{j}X":
+                        return reg_dict[f"R{j}X"]
+                    elif reg_ == f"{j}L":
+                        return reg_dict[f"R{j}X"]
+                    elif reg_ == f"{j}H":
+                        return reg_dict[f"R{j}X"]
 
-                for i in {"BP","SI","DI","SP", "IP"}:
-                    if reg == f"R{i}":
-                        return regDict[f"R{i}"]
-                    elif reg == f"E{i}":
-                        return regDict[f"R{i}"]
-                    elif reg == f"{i}":
-                        return regDict[f"R{i}"]
-                    elif reg == f"{i}L":
-                        return regDict[f"R{i}"]
+                for j in {"BP", "SI", "DI", "SP", "IP"}:
+                    if reg_ == f"R{j}":
+                        return reg_dict[f"R{j}"]
+                    elif reg_ == f"E{j}":
+                        return reg_dict[f"R{j}"]
+                    elif reg_ == f"{j}":
+                        return reg_dict[f"R{j}"]
+                    elif reg_ == f"{j}L":
+                        return reg_dict[f"R{j}"]
 
-                for i in range(8,16):
-                    if reg == f"R{i}":
-                        return regDict[f"R{i}"]
-                    elif reg ==  f"R{i}D":
-                        return regDict[f"R{i}"]
-                    elif reg ==  f"R{i}W":
-                        return regDict[f"R{i}"]
-                    elif reg ==  f"R{i}B":
-                        return regDict[f"R{i}"]
-                
-                print(f"Unsupported identifier {reg}")
+                for j in range(8, 16):
+                    if reg_ == f"R{j}":
+                        return reg_dict[f"R{j}"]
+                    elif reg_ == f"R{j}D":
+                        return reg_dict[f"R{j}"]
+                    elif reg_ == f"R{j}W":
+                        return reg_dict[f"R{j}"]
+                    elif reg_ == f"R{j}B":
+                        return reg_dict[f"R{j}"]
+
+                print(f"Unsupported identifier {reg_}")
                 exit(1)
-                
+
         taint = InputTaint()
         tainted_positions = []
         for d in dependencies:
@@ -340,16 +343,20 @@ class X86UnicornModel(Model):
             elif type(d) is str:
                 # flag register
                 registers = [UC_X86_REG_RAX, UC_X86_REG_RBX, UC_X86_REG_RCX, UC_X86_REG_RDX,
-                     UC_X86_REG_RSI, UC_X86_REG_RDI, UC_X86_REG_EFLAGS]
+                             UC_X86_REG_RSI, UC_X86_REG_RDI, UC_X86_REG_EFLAGS]
                 reg = get_register(d)
                 if reg in registers:
-                    pos = CONF.input_main_region_size + CONF.input_assist_region_size + registers.index(get_register(d)) 
+                    pos = CONF.input_main_region_size + \
+                          CONF.input_assist_region_size + \
+                          registers.index(get_register(d))
             if pos != -1:
                 tainted_positions.append(pos)
 
         tainted_positions = list(dict.fromkeys(tainted_positions))
         tainted_positions.sort()
-        for i in range(CONF.input_main_region_size + CONF.input_assist_region_size + CONF.input_register_region_size):
+        for i in range(CONF.input_main_region_size +
+                       CONF.input_assist_region_size +
+                       CONF.input_register_region_size):
             if i in tainted_positions:
                 taint[i] = True
             else:
@@ -418,7 +425,15 @@ class X86UnicornModel(Model):
         pass  # Implemented by subclasses
 
     @staticmethod
-    def trace_code(emulator: Uc, address, size, model) -> None:
+    def trace_instruction(emulator: Uc, address, size, model) -> None:
+        pass  # Implemented by subclasses
+
+    @staticmethod
+    def speculate_mem_access(emulator, access, address, size, value, model):
+        pass  # Implemented by subclasses
+
+    @staticmethod
+    def speculate_instruction(emulator: Uc, address, size, model) -> None:
         pass  # Implemented by subclasses
 
     @staticmethod
@@ -440,20 +455,22 @@ class X86UnicornSeq(X86UnicornModel):
     """
 
     @staticmethod
-    def trace_mem_access(emulator, access, address: int, size, value, model, tracking = True):
-        if (model.dependencyTracker is not None) and tracking:
-            # Track the memory access
+    def trace_mem_access(emulator, access, address: int, size, value, model):
+        # Dependency tracking: Track the memory access
+        if model.dependency_tracker is not None:
             mode = "WRITE" if access == UC_MEM_WRITE else "READ"
-            model.dependencyTracker.trackMemoryAccess(address,size,mode)
+            model.dependency_tracker.track_memory_access(address, size, mode)
+
         model.tracer.observe_mem_access(access, address, size, value, model)
 
     @staticmethod
-    def trace_code(emulator: Uc, address, size, model, tracking = True) -> None:
-        if (model.dependencyTracker is not None) and tracking:
-            # Whenever we fetch a new instruction, we update the tracking data
-            model.dependencyTracker.finalizeTracking()
+    def trace_instruction(emulator: Uc, address, size, model) -> None:
+        # Dependency tracking: Whenever we fetch a new instruction, we update the tracking data
+        if model.dependency_tracker is not None:
+            model.dependency_tracker.finalize_tracking()
             code = bytes(emulator.mem_read(address, size))
-            model.dependencyTracker.initialize(code)
+            model.dependency_tracker.initialize(code)
+
         model.tracer.observe_instruction(address, size, model)
 
 
@@ -471,26 +488,16 @@ class X86UnicornSpec(X86UnicornModel):
         super(X86UnicornSpec, self).__init__(*args)
 
     @staticmethod
-    def trace_mem_access(emulator, access, address, size, value, model, tracking = True):
-        if (model.dependencyTracker is not None) and tracking:
-            # Track the memory access
-            mode = "WRITE" if access == UC_MEM_WRITE else "READ"
-            model.dependencyTracker.trackMemoryAccess(address,size,mode)
-
+    def trace_mem_access(emulator, access, address, size, value, model):
         # when in speculation, log all changes to memory
         if access == UC_MEM_WRITE and model.store_logs:
             model.store_logs[-1].append((address, emulator.mem_read(address, 8)))
 
-        model.tracer.observe_mem_access(access, address, size, value, model)
+        X86UnicornSeq.trace_mem_access(emulator, access, address, size, value, model)
+        model.speculate_mem_access(emulator, access, address, size, value, model)
 
     @staticmethod
-    def trace_code(emulator: Uc, address, size, model, tracking = True) -> None:
-        if (model.dependencyTracker is not None) and tracking:
-            # Whenever we fetch a new instruction, we update the tracking data
-            model.dependencyTracker.finalizeTracking()
-            code = bytes(emulator.mem_read(address, size))
-            model.dependencyTracker.initialize(code)
-
+    def trace_instruction(emulator: Uc, address, size, model) -> None:
         if model.in_speculation:
             model.speculation_window += 1
             # rollback on a serializing instruction (lfence, sfence, mfence)
@@ -502,7 +509,8 @@ class X86UnicornSpec(X86UnicornModel):
             if model.speculation_window > CONF.max_speculation_window:
                 emulator.emu_stop()
 
-        model.tracer.observe_instruction(address, size, model)
+        X86UnicornSeq.trace_instruction(emulator, address, size, model)
+        model.speculate_instruction(emulator, address, size, model)
 
     def checkpoint(self, emulator, next_instruction):
         flags = emulator.reg_read(UC_X86_REG_EFLAGS)
@@ -511,8 +519,8 @@ class X86UnicornSpec(X86UnicornModel):
         self.checkpoints.append((context, next_instruction, flags, spec_window))
         self.store_logs.append([])
         self.in_speculation = True
-        if self.dependencyTracker is not None:
-            self.dependencyTracker.checkpoint()
+        if self.dependency_tracker is not None:
+            self.dependency_tracker.checkpoint()
 
     def rollback(self):
         # restore register values
@@ -538,9 +546,9 @@ class X86UnicornSpec(X86UnicornModel):
         # restore the flags last, to avoid corruption by other operations
         self.emulator.reg_write(UC_X86_REG_EFLAGS, flags)
 
-        # restrore the dependency tracking
-        if self.dependencyTracker is not None:
-            self.dependencyTracker.rollback()
+        # restore the dependency tracking
+        if self.dependency_tracker is not None:
+            self.dependency_tracker.rollback()
 
         # restart without misprediction
         self.emulator.emu_start(next_instr, self.code_base + len(self.code),
@@ -607,9 +615,7 @@ class X86UnicornCond(X86UnicornSpec):
     }
 
     @staticmethod
-    def trace_code(emulator: Uc, address, size, model, tracking = True) -> None:
-        X86UnicornSpec.trace_code(emulator, address, size, model, tracking)
-
+    def speculate_instruction(emulator: Uc, address, size, model) -> None:
         # reached max spec. window? skip
         if len(model.checkpoints) >= model.nesting:
             return
@@ -655,12 +661,12 @@ class X86UnicornCond(X86UnicornSpec):
 
 class X86UnicornBpas(X86UnicornSpec):
     @staticmethod
-    def trace_mem_access(emulator, access, address, size, value, model, tracking = True):
+    def speculate_mem_access(emulator, access, address, size, value, model):
         """
         Since Unicorn does not have post-instruction hooks,
         I have to implement it in a dirty way:
         Save the information about the store here, but execute all the
-        contract logic in a hook before the next instruction (see trace_code)
+        contract logic in a hook before the next instruction (see trace_instruction)
         """
         if access == UC_MEM_WRITE:
             rip = emulator.reg_read(UC_X86_REG_RIP)
@@ -668,12 +674,8 @@ class X86UnicornBpas(X86UnicornSpec):
             if opcode not in [0xE8, 0xFF, 0x9A]:  # ignore CALL instructions
                 model.previous_store = (address, size, emulator.mem_read(address, size), value)
 
-        X86UnicornSpec.trace_mem_access(emulator, access, address, size, value, model, tracking)
-
     @staticmethod
-    def trace_code(emulator: Uc, address, size, model, tracking = True) -> None:
-        X86UnicornSpec.trace_code(emulator, address, size, model, tracking)
-
+    def speculate_instruction(emulator: Uc, address, size, model) -> None:
         # reached max spec. window? skip
         if len(model.checkpoints) >= model.nesting:
             return
@@ -698,9 +700,7 @@ class X86UnicornNull(X86UnicornSpec):
     instruction_address: int
 
     @staticmethod
-    def trace_mem_access(emulator, access, address, size, value, model, tracking = True):
-        X86UnicornSpec.trace_mem_access(emulator, access, address, size, value, model, tracking)
-
+    def speculate_mem_access(emulator, access, address, size, value, model):
         # reached max spec. window? skip
         if len(model.checkpoints) >= model.nesting:
             return
@@ -722,25 +722,19 @@ class X86UnicornNull(X86UnicornSpec):
         emulator.mem_write(address, zero_value)
 
     @staticmethod
-    def trace_code(emulator: Uc, address, size, model, tracking = True) -> None:
-        X86UnicornSpec.trace_code(emulator, address, size, model, tracking)
+    def speculate_instruction(emulator: Uc, address, size, model) -> None:
         model.instruction_address = address
 
 
 class X86UnicornCondBpas(X86UnicornSpec):
     @staticmethod
-    def trace_mem_access(emulator, access, address, size, value, model, tracking = True):
-        X86UnicornBpas.trace_mem_access(emulator, access, address, size, value, model, tracking)
+    def speculate_mem_access(emulator, access, address, size, value, model):
+        X86UnicornBpas.speculate_mem_access(emulator, access, address, size, value, model)
 
     @staticmethod
-    def trace_code(emulator: Uc, address, size, model, tracking = True):
-        if (model.dependencyTracker is not None) and tracking:
-            # Whenever we fetch a new instruction, we update the tracking data
-            model.dependencyTracker.finalizeTracking()
-            code = bytes(emulator.mem_read(address, size))
-            model.dependencyTracker.initialize(code)
-        X86UnicornCond.trace_code(emulator, address, size, model, tracking = False)
-        X86UnicornBpas.trace_code(emulator, address, size, model, tracking = False)
+    def speculate_instruction(emulator: Uc, address, size, model) -> None:
+        X86UnicornCond.speculate_instruction(emulator, address, size, model)
+        X86UnicornBpas.speculate_instruction(emulator, address, size, model)
 
 
 def get_model(bases: Tuple[int, int]) -> Model:
@@ -782,12 +776,14 @@ def get_model(bases: Tuple[int, int]) -> Model:
             exit(1)
 
         if CONF.dependency_tracking:
-            ## 64-bits only
+            # 64-bits only
             if CONF.contract_observation_mode == 'ctr' or CONF.contract_observation_mode == 'arch':
-                initObs = ["RAX", "RBX", "RCX", "RDX", "CF", "PF", "AF", "ZF", "SF", "TF", "IF", "DF", "OF", "AC"]
-                model.dependencyTracker = DependencyTracker(64, initialObservations = initObs)
+                initial_observations = ["RAX", "RBX", "RCX", "RDX", "CF", "PF", "AF", "ZF", "SF",
+                                        "TF", "IF",
+                                        "DF", "OF", "AC"]
+                model.dependency_tracker = DependencyTracker(64, initial_observations)
             else:
-                model.dependencyTracker = DependencyTracker(64)
+                model.dependency_tracker = DependencyTracker(64)
 
         return model
     else:

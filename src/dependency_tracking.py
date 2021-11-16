@@ -3,39 +3,52 @@ from typing import Dict, Sequence
 from types import ModuleType
 import copy
 
+
 def create_enum_dict(module: ModuleType) -> Dict[int, str]:
-    return {module.__dict__[key]:key for key in module.__dict__ if isinstance(module.__dict__[key], int)}
+    return {
+        module.__dict__[key]: key
+        for key in module.__dict__
+        if isinstance(module.__dict__[key], int)
+    }
+
 
 REGISTER_TO_STRING: Dict[int, str] = create_enum_dict(Register)
+OP_ACCESS_TO_STRING: Dict[int, str] = create_enum_dict(OpAccess)
+FLOW_CONTROL_TO_STRING: Dict[int, str] = create_enum_dict(FlowControl)
+MEMORY_SIZE_TO_STRING: Dict[int, str] = create_enum_dict(MemorySize)
+
+
 def register_to_string(value: int) -> str:
     s = REGISTER_TO_STRING.get(value)
     if s is None:
         return str(value) + " /*Register enum*/"
     return s
 
-OP_ACCESS_TO_STRING: Dict[int, str] = create_enum_dict(OpAccess)
+
 def op_access_to_string(value: int) -> str:
     s = OP_ACCESS_TO_STRING.get(value)
     if s is None:
         return str(value) + " /*OpAccess enum*/"
     return s
 
-FLOW_CONTROL_TO_STRING: Dict[int, str] = create_enum_dict(FlowControl)
+
 def flow_control_to_string(value: int) -> str:
     s = FLOW_CONTROL_TO_STRING.get(value)
     if s is None:
         return str(value) + " /*FlowControl enum*/"
     return s
 
-MEMORY_SIZE_TO_STRING: Dict[int, str] = create_enum_dict(MemorySize)
+
 def memory_size_to_string(value: int) -> str:
     s = MEMORY_SIZE_TO_STRING.get(value)
     if s is None:
         return str(value) + " /*MemorySize enum*/"
     return s
 
+
 def used_reg_to_string(reg_info: UsedRegister) -> str:
     return register_to_string(reg_info.register) + ":" + op_access_to_string(reg_info.access)
+
 
 def used_mem_to_string(mem_info: UsedMemory) -> str:
     sb = "[" + register_to_string(mem_info.segment) + ":"
@@ -53,8 +66,10 @@ def used_mem_to_string(mem_info: UsedMemory) -> str:
         if need_plus:
             sb += "+"
         sb += f"0x{mem_info.displacement:X}"
-    sb += ";" + memory_size_to_string(mem_info.memory_size) + ";" + op_access_to_string(mem_info.access) + "]"
+    sb += ";" + memory_size_to_string(mem_info.memory_size) + ";" + op_access_to_string(
+        mem_info.access) + "]"
     return sb
+
 
 def decode_rflags_bits(rf: int) -> list:
     sb = []
@@ -80,53 +95,40 @@ def decode_rflags_bits(rf: int) -> list:
         sb.append("UIF")
     return sb
 
-def getRegisterLabel(regTracking, register_name:str) -> set:
-    if register_name not in regTracking.keys():
+
+def get_register_label(reg_tracking, register_name: str) -> set:
+    if register_name not in reg_tracking.keys():
         return {register_name}
     else:
         label = set()
-        for reg in registerDeps(register_name):
-            if reg not in regTracking.keys():
+        for reg in register_deps(register_name):
+            if reg not in reg_tracking.keys():
                 label.add(reg)
             else:
-                label = label.union(regTracking[reg])
+                label = label.union(reg_tracking[reg])
         return label
         # return regTracking[register_name]
 
 
-
-def getFlagLabel(flagTracking, flag_name:str) -> set:
-    if flag_name not in flagTracking.keys():
+def get_flag_label(flag_tracking, flag_name: str) -> set:
+    if flag_name not in flag_tracking.keys():
         return {flag_name}
     else:
-        return flagTracking[flag_name]
+        return flag_tracking[flag_name]
 
-def getMemLabel(memTracking, address:int) -> set:
-    if address not in memTracking.keys():
+
+def get_mem_label(mem_tracking, address: int) -> set:
+    if address not in mem_tracking.keys():
         return {address}
     else:
-        return memTracking[address]
+        return mem_tracking[address]
 
 
-def desugarRegister(reg:str) -> str:
-    if reg == "PC":
-        return reg
-    for i in {"A","B","C","D"}:
-        if reg in {f"{i}L", f"{i}H", f"{i}X", f"E{i}X", f"R{i}X"}:
-            return f"R{i}X"
-    for i in {"BP","SI","DI","SP", "IP"}:
-        if reg in {f"{i}L", f"{i}", f"E{i}", f"R{i}"}:
-            return f"R{i}"
-    for i in range(8,16):
-        if reg in {f"R{i}B", f"R{i}W", f"R{i}D", f"R{i}"}:
-            return f"R{i}"
-
-
-def registerDeps(reg:str) -> set:
+def register_deps(reg: str) -> set:
     if reg == "PC":
         return {reg}
-    for i in {"A","B","C","D"}:
-        if reg ==  f"R{i}X":
+    for i in {"A", "B", "C", "D"}:
+        if reg == f"R{i}X":
             return {f"{i}L", f"{i}H", f"{i}X", f"E{i}X", f"R{i}X"}
         elif reg == f"E{i}X":
             return {f"{i}L", f"{i}H", f"{i}X", f"E{i}X"}
@@ -136,8 +138,8 @@ def registerDeps(reg:str) -> set:
             return {f"{i}L"}
         elif reg == f"{i}H":
             return {f"{i}H"}
-    
-    for i in {"BP","SI","DI","SP", "IP"}:
+
+    for i in {"BP", "SI", "DI", "SP", "IP"}:
         if reg == f"R{i}":
             return {f"{i}L", f"{i}", f"E{i}", f"R{i}"}
         elif reg == f"E{i}":
@@ -147,75 +149,75 @@ def registerDeps(reg:str) -> set:
         elif reg == f"{i}L":
             return {f"{i}L"}
 
-    for i in range(8,16):
-        if reg == f"R{i}":
-            return {f"R{i}B", f"R{i}W", f"R{i}D", f"R{i}"}
-        elif reg ==  f"R{i}D":
-            return {f"R{i}B", f"R{i}W", f"R{i}D"}
-        elif reg ==  f"R{i}W":
-            return {f"R{i}B", f"R{i}W"}
-        elif reg ==  f"R{i}B":
-            return {f"R{i}B"}
+    for j in range(8, 16):
+        if reg == f"R{j}":
+            return {f"R{j}B", f"R{j}W", f"R{j}D", f"R{j}"}
+        elif reg == f"R{j}D":
+            return {f"R{j}B", f"R{j}W", f"R{j}D"}
+        elif reg == f"R{j}W":
+            return {f"R{j}B", f"R{j}W"}
+        elif reg == f"R{j}B":
+            return {f"R{j}B"}
 
     print(f"Unsupported register {reg}")
     exit(1)
 
 
-
 class DependencyTracker:
+    # TODO:
+    # 1) When we observe an instruction operands,
+    # right now we do not distinguish between 1st and 2nd operand. Fix that!!
 
-    ## TODO: 
-    # 1) When we observe an instruction operands, right now we do not distinguish between 1st and 2nd operand. Fix that!!
-
-    def __init__(self, code_biteness, initialObservations = []):
-        self.flagTracking = {}
-        self.regTracking = {}
-        self.memTracking = {}
+    def __init__(self, code_biteness, initial_observations=None):
+        if initial_observations is None:
+            initial_observations = []
+        self.flag_tracking = {}
+        self.reg_tracking = {}
+        self.mem_tracking = {}
         self.code_biteness = code_biteness
-        self.srcRegs = set()
-        self.srcFlags = set()
-        self.srcMems = set()
-        self.trgRegs = set()
-        self.trgFlags = set()
-        self.trgMems = set()
+        self.src_regs = set()
+        self.src_flags = set()
+        self.src_mems = set()
+        self.trg_regs = set()
+        self.trg_flags = set()
+        self.trg_mems = set()
         self.debug = False
-        self.initialObservations = initialObservations
-        self.observedLabels = set(self.initialObservations)
-        self.strictUndefined = True
+        self.initial_observations = initial_observations
+        self.observed_labels = set(self.initial_observations)
+        self.strict_undefined = True
         self.checkpoints = []
 
     def reset(self):
-        self.flagTracking = {}
-        self.regTracking = {}
-        self.memTracking = {}
-        self.observedLabels = set(self.initialObservations)
-        self.srcRegs = set()
-        self.srcFlags = set()
-        self.srcMems = set()
-        self.trgRegs = set()
-        self.trgFlgs = set()
-        self.trgMems = set()
+        self.flag_tracking = {}
+        self.reg_tracking = {}
+        self.mem_tracking = {}
+        self.observed_labels = set(self.initial_observations)
+        self.src_regs = set()
+        self.src_flags = set()
+        self.src_mems = set()
+        self.trg_regs = set()
+        self.trg_flags = set()
+        self.trg_mems = set()
         self.checkpoints = []
 
     def initialize(self, instruction):
-        ## Collect source and target registers/flags
+        # TODO: this function is extremely slow, has to get optimized
+        # Collect source and target registers/flags
+        self.src_regs = set()
+        self.src_flags = set()
+        self.src_mems = set()
+        self.trg_regs = set()
+        self.trg_flags = set()
+        self.trg_mems = set()
 
-        self.srcRegs = set()
-        self.srcFlags = set()
-        self.srcMems = set()
-        self.trgRegs = set()
-        self.trgFlgs = set()
-        self.trgMems = set()
-        
         decoder = Decoder(self.code_biteness, instruction)
-        formatter = FastFormatter(FormatterSyntax.NASM) #Formatter(FormatterSyntax.NASM)
+        formatter = FastFormatter(FormatterSyntax.NASM)  # Formatter(FormatterSyntax.NASM)
         info_factory = InstructionInfoFactory()
         index = 0
         for instr in decoder:
             info = info_factory.info(instr)
 
             if self.debug:
-                ### DEBUG
                 print(f"{instr}")
                 for reg_info in info.used_registers():
                     print(f"    Used reg: {used_reg_to_string(reg_info)}")
@@ -234,119 +236,125 @@ class DependencyTracker:
                 if instr.rflags_modified != RflagsBits.NONE:
                     print(f"    RFLAGS Modified: {decode_rflags_bits(instr.rflags_modified)}")
                 print(f"    FlowControl: {flow_control_to_string(instr.flow_control)}")
-        
 
             for reg_info in info.used_registers():
                 if op_access_to_string(reg_info.access) in ["READ", "READ_WRITE", "COND_READ"]:
-                    self.srcRegs.add(register_to_string(reg_info.register))
+                    self.src_regs.add(register_to_string(reg_info.register))
                 if op_access_to_string(reg_info.access) in ["WRITE", "READ_WRITE", "COND_WRITE"]:
-                    self.trgRegs.add(register_to_string(reg_info.register))
+                    self.trg_regs.add(register_to_string(reg_info.register))
             if flow_control_to_string(instr.flow_control) != "NEXT":
-                self.trgRegs.add("PC")
-      
-            self.srcFlags = set(decode_rflags_bits(instr.rflags_read))
-            if self.strictUndefined:
-                 self.srcFlags =  self.srcFlags.union( set(decode_rflags_bits(instr.rflags_undefined)) )
-            self.trgFlags = set(decode_rflags_bits(instr.rflags_modified))
+                self.trg_regs.add("PC")
+
+            self.src_flags = set(decode_rflags_bits(instr.rflags_read))
+            if self.strict_undefined:
+                self.src_flags = self.src_flags.union(
+                    set(decode_rflags_bits(instr.rflags_undefined)))
+            self.trg_flags = set(decode_rflags_bits(instr.rflags_modified))
 
             if self.debug:
-                print(f"    Source Registers: {self.srcRegs}")
-                print(f"    Target Registers: {self.trgRegs}")
-                print(f"    Source Flags: {self.srcFlags}")
-                print(f"    Target Flags: {self.trgFlags}")
+                print(f"    Source Registers: {self.src_regs}")
+                print(f"    Target Registers: {self.trg_regs}")
+                print(f"    Source Flags: {self.src_flags}")
+                print(f"    Target Flags: {self.trg_flags}")
 
             index = index + 1
-            assert(index <= 1)
+            assert (index <= 1)
 
-    def trackMemoryAccess(self, address, size, mode):
+    def track_memory_access(self, address, size, mode):
         if self.debug:
             print(f"Track Memory Access {address} {size} {mode}")
 
-        ## Tracking concrete memory accesses
+        # Tracking concrete memory accesses
         if mode == "READ":
-            for i in range(0,size):
-                self.srcMems.add(address + i)
+            for i in range(0, size):
+                self.src_mems.add(address + i)
         elif mode == "WRITE":
-            for i in range(0,size):
-                self.trgMems.add(address + i)
+            for i in range(0, size):
+                self.trg_mems.add(address + i)
         else:
             print(f"Unsupported mode {mode}")
             exit(1)
 
+    def finalize_tracking(self):
+        # Compute the new dependency maps
 
-    def finalizeTracking(self):
-        #Compute the new dependency maps
+        # Compute source label
+        src_label = set()
+        for reg in self.src_regs:
+            src_label = src_label.union(get_register_label(self.reg_tracking, reg))
+        for flag in self.src_flags:
+            src_label = src_label.union(get_flag_label(self.flag_tracking, flag))
+        for addr in self.src_mems:
+            src_label = src_label.union(get_mem_label(self.mem_tracking, addr))
 
-        ## Compute source label
-        srcLabel = set()
-        for reg in self.srcRegs:
-            srcLabel = srcLabel.union(getRegisterLabel(self.regTracking, reg))
-        for flag in self.srcFlags:
-            srcLabel = srcLabel.union(getFlagLabel(self.flagTracking, flag))
-        for addr in self.srcMems:
-            srcLabel = srcLabel.union(getMemLabel(self.memTracking, addr))
-
-        ## Propagate label to all targets
-        for reg in self.trgRegs:
-            self.regTracking[reg] = list(srcLabel)
-        for flg in self.trgFlags:
-            self.flagTracking[flg] = list(srcLabel)
-        for mem in self.trgMems:
-            self.memTracking[mem] = list(srcLabel)
+        # Propagate label to all targets
+        for reg in self.trg_regs:
+            self.reg_tracking[reg] = list(src_label)
+        for flg in self.trg_flags:
+            self.flag_tracking[flg] = list(src_label)
+        for mem in self.trg_mems:
+            self.mem_tracking[mem] = list(src_label)
 
         if self.debug:
             print("Tracking information")
-            print(f"Source label: {srcLabel}")
-            print(f"Registers: {self.regTracking}")
-            print(f"Flags: {self.flagTracking}")
-            print(f"Memory: {self.memTracking}")
+            print(f"Source label: {src_label}")
+            print(f"Registers: {self.reg_tracking}")
+            print(f"Flags: {self.flag_tracking}")
+            print(f"Memory: {self.mem_tracking}")
 
-    def observeInstruction(self, mode):
+    def observe_instruction(self, mode):
         if self.debug:
-            print(f"ObservedLabels: {self.observedLabels}")
+            print(f"ObservedLabels: {self.observed_labels}")
         if mode == "PC":
-            ## Add regLabel(PC) to the set of observed labels
-            self.observedLabels = self.observedLabels.union(getRegisterLabel(self.regTracking, "PC"))
+            # Add regLabel(PC) to the set of observed labels
+            self.observed_labels = \
+                self.observed_labels.union(get_register_label(self.reg_tracking, "PC"))
         elif mode == "OPS":
-            ## For all registers r in the instruction operands (i.e., all source registers), Add regLabel(r) to the set of observed labels
-            for reg in self.srcRegs:
-                self.observedLabels = self.observedLabels.union(getRegisterLabel(self.regTracking, reg))
+            # For all registers r in the instruction operands
+            # (i.e., all source registers), Add regLabel(r) to the set of observed labels
+            for reg in self.src_regs:
+                self.observed_labels = \
+                    self.observed_labels.union(get_register_label(self.reg_tracking, reg))
         else:
             print(f"Invalid mode {mode}")
             exit(1)
         if self.debug:
-            print(f"ObserveInstruction {mode} : {self.observedLabels}")
+            print(f"ObserveInstruction {mode} : {self.observed_labels}")
 
-    def observerMemoryAddress(self, address:int, size:int):
-        ## Add memLabel(address) to the set of observed labels
+    def observe_memory_address(self, address: int, size: int):
+        # Add memLabel(address) to the set of observed labels
         if self.debug:
-            print(f"ObservedLabels: {self.observedLabels}")
-        for i in range(0,size):
-            self.observedLabels = self.observedLabels.union(getMemLabel(self.memTracking, addr+i))
+            print(f"ObservedLabels: {self.observed_labels}")
+        for i in range(0, size):
+            self.observed_labels = \
+                self.observed_labels.union(get_mem_label(self.mem_tracking, address + i))
         if self.debug:
-            print(f"observerMemoryAddress {address} {size} : {self.observedLabels}")
+            print(f"ObserveMemoryAddress {address} {size} : {self.observed_labels}")
 
-    def saveState(self):
+    def save_state(self):
         # return a copy of the tracker state!
-        return copy.deepcopy(self.flagTracking), copy.deepcopy(self.regTracking), copy.deepcopy(self.memTracking), copy.deepcopy(self.observedLabels)
+        return copy.deepcopy(self.flag_tracking), \
+               copy.deepcopy(self.reg_tracking), \
+               copy.deepcopy(self.mem_tracking), \
+               copy.deepcopy(self.observed_labels)
 
-    def restoreState(self, flagTracking, regTracking, memTracking, observedLabels):
-        self.flagTracking = copy.deepcopy(flagTracking)
-        self.regTracking = copy.deepcopy(regTracking)
-        self.memTracking = copy.deepcopy(memTracking)
-        self.observedLabels = copy.deepcopy(observedLabels)
+    def restore_state(self, flag_tracking, reg_tracking, mem_tracking, observed_labels):
+        self.flag_tracking = copy.deepcopy(flag_tracking)
+        self.reg_tracking = copy.deepcopy(reg_tracking)
+        self.mem_tracking = copy.deepcopy(mem_tracking)
+        self.observed_labels = copy.deepcopy(observed_labels)
 
     def checkpoint(self):
-        t = self.saveState()
+        t = self.save_state()
         self.checkpoints.append(t)
 
     def rollback(self):
-        if len(self.checkpoints)>0:
+        if len(self.checkpoints) > 0:
             t = self.checkpoints.pop()
-            self.restoreState(*t)
+            self.restore_state(*t)
         else:
             print("There are no more checkpoints")
             exit(1)
 
     def get_observed_dependencies(self):
-        return copy.deepcopy(self.observedLabels)
+        return copy.deepcopy(self.observed_labels)
