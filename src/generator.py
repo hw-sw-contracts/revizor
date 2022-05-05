@@ -21,6 +21,11 @@ from interfaces import Generator, TestCase, Operand, RegisterOperand, FlagsOpera
 from service import NotSupportedException
 from config import CONF, ConfigException
 
+def _remove_prefix(s : str, pref: str):
+    if s.startswith(pref):
+        return s[len(pref):]
+    else:
+        return s[:]
 
 # Helpers
 class GeneratorException(Exception):
@@ -105,7 +110,7 @@ class ConfigurableGenerator(Generator, abc.ABC):
         self.test_case.asm_path = asm_file
 
         bin_file = asm_file[:-4] + ".o"
-        self.assemble(asm_file, bin_file)
+        self.assemble(asm_file, bin_file) # generate bin from asm using as utility
         self.test_case.bin_path = bin_file
 
         self.map_addresses(self.test_case, bin_file)
@@ -127,7 +132,7 @@ class ConfigurableGenerator(Generator, abc.ABC):
                 lines = f.read().split("\n")
 
             for msg in error_msg.split("\n"):
-                msg = msg.removeprefix(asm_file + ":")
+                msg = _remove_prefix(msg, asm_file + ":")
                 line_num_str = re.search(r"(\d+):", msg)
                 if not line_num_str:
                     print(msg)
@@ -215,7 +220,7 @@ class RandomGenerator(ConfigurableGenerator, abc.ABC):
 
         # Create basic blocks
         node_count = random.randint(CONF.min_bb_per_function, CONF.max_bb_per_function)
-        func_name = label.removeprefix(".function_")
+        func_name = _remove_prefix(label, ".function_")
         nodes = [BasicBlock(f".bb_{func_name}.{i}") for i in range(node_count)]
 
         # Connect BBs into a graph
@@ -671,7 +676,7 @@ class X86Generator(ConfigurableGenerator, abc.ABC):
             line = re.search(r"(.*)#.*", line).group(1).strip()  # type: ignore
 
         # extract operands
-        operands_raw = line.removeprefix(name).split(",")
+        operands_raw = _remove_prefix(line, name).split(",")
         if operands_raw == [""]:  # no operands
             operands_raw = []
         else:  # clean the operands
@@ -795,7 +800,9 @@ class X86Generator(ConfigurableGenerator, abc.ABC):
 
 
 class X86LFENCEPass(Pass):
-
+    """
+    Insert an LFENCE instruction after every instruction in class:`interfaces.TestCase`
+    """
     def run_on_test_case(self, test_case: TestCase) -> None:
         for func in test_case.functions:
             for bb in func:
