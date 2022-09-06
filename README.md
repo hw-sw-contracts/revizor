@@ -1,3 +1,9 @@
+# WE MOVED!
+
+This repository was migrated back to the original repo. For the most recent version of the project, see [Revizor from Microsoft](https://github.com/microsoft/sca-fuzzer).
+
+----
+
 # Revizor
 
 This is Revizor, a microarchitectural fuzzer.
